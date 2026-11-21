@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "headunit-toolkit"
+version = "0.1.0"
+description = "Read and modify Allwinner F133 (Melis) car-stereo firmware images"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = ["Pillow>=9"]
+
+[project.scripts]
+headunit = "headunit.cli:main"
+
+[tool.setuptools]
+packages = ["headunit"]

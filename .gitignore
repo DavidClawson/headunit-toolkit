@@ -1,0 +1,22 @@
+# Vendor firmware and anything extracted from it is NOT redistributable.
+# Keep your own copies here locally; never commit them.
+*.img
+*.fex
+*.bin
+*.mod
+*.drv
+stock/
+nor_backup/
+variants/
+samples/*.jpg
+samples/*.png
+out/
+parts/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+build/
+dist/
