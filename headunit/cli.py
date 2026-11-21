@@ -66,6 +66,47 @@ def cmd_screen(args):
     print("\n* geometry for non-Str widgets is raw (shifted by one field)")
 
 
+def _parse_color(s: str) -> int:
+    """Parse ``ff00aa`` / ``0xff00aa`` / ``#ff00aa`` into a 0xRRGGBB int."""
+    v = int(s.lstrip("#").removeprefix("0x").removeprefix("0X"), 16)
+    if not 0 <= v <= 0xFFFFFF:
+        raise ValueError(f"color {s!r} out of 0xRRGGBB range")
+    return v
+
+
+def cmd_edit_widget(args):
+    from .datav1_edit import set_colors, set_geometry, set_value
+    if args.xywh is None and args.fg is None and args.alt is None \
+            and args.value is None:
+        raise SystemExit("nothing to do: pass --xywh, --fg, --alt, or --value")
+
+    img = _load_img(args.image)
+    changes = []
+    if args.xywh is not None:
+        x, y, w, h = args.xywh
+        changes += set_geometry(img, args.path, args.widget, x, y, w, h,
+                                partition=args.partition, force=args.force)
+    if args.fg is not None or args.alt is not None:
+        fg = _parse_color(args.fg) if args.fg is not None else None
+        alt = _parse_color(args.alt) if args.alt is not None else None
+        changes += set_colors(img, args.path, args.widget, fg=fg, alt=alt,
+                              partition=args.partition)
+    if args.value is not None:
+        changes += set_value(img, args.path, args.widget, args.value,
+                             partition=args.partition)
+
+    out_img = os.path.join(args.out, "Update", "LTTF133.img")
+    os.makedirs(os.path.dirname(out_img), exist_ok=True)
+    with open(out_img, "wb") as fh:
+        fh.write(img.to_bytes())
+    print(f"edited {args.widget} in {args.path}: {len(changes)} byte range(s)")
+    for ch in changes:
+        print(f"  {ch.what:<12} [{ch.image_offset:#010x}..{ch.end:#010x}) "
+              f"{ch.before.hex()} -> {ch.after.hex()}")
+    print(f"wrote {out_img}")
+    print("Copy the whole 'Update' folder to a FAT32 USB stick.")
+
+
 def cmd_logo(args):
     from .logo import swap_logo
     img = _load_img(args.image)
@@ -111,6 +152,22 @@ def main(argv=None):
     s.add_argument("path", help="e.g. RadioRds.data")
     s.add_argument("--partition", default="data_udisk.fex")
     s.set_defaults(func=cmd_screen)
+
+    s = sub.add_parser("edit-widget",
+                       help="in-place edit a DATAV1.0 widget (geometry/color/text)")
+    s.add_argument("image", help="stock LTTF133.img")
+    s.add_argument("path", help="e.g. RadioRds.data")
+    s.add_argument("widget", help="e.g. ViewShowStrRdsPs")
+    s.add_argument("--xywh", nargs=4, type=int, metavar=("X", "Y", "W", "H"),
+                   help="set geometry (Str widgets; use --force for others)")
+    s.add_argument("--fg", metavar="RRGGBB", help="set primary color (Str)")
+    s.add_argument("--alt", metavar="RRGGBB", help="set secondary color (Str)")
+    s.add_argument("--value", help="set the sample/value text (Str; must fit)")
+    s.add_argument("--force", action="store_true",
+                   help="allow --xywh on non-Str widgets (raw, shifted slot)")
+    s.add_argument("--partition", default="data_udisk.fex")
+    s.add_argument("--out", required=True, help="output folder (gets Update/)")
+    s.set_defaults(func=cmd_edit_widget)
 
     s = sub.add_parser("logo", help="build an update image with a custom splash")
     s.add_argument("image", help="stock LTTF133.img")

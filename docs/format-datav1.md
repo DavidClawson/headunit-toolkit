@@ -64,3 +64,55 @@ config in `sys_config_nor.fex`: `lcd_x=720`, `lcd_y=1280`), so x can run to
   that the app fills the control from the tuner's RDS 2A/2B decode.
 
 See [hardware.md](hardware.md) for the tuner/RDS side.
+
+## Editing (in-place writer)
+
+`headunit.datav1_edit` adds the writer side. A `*.data` file lives inside the
+`data_udisk.fex` MINFS partition at `node.offset`, so **only edits that keep the
+file's byte length unchanged are safe** — nothing moves, and the single
+additive partition checksum in `Vdata_udisk.fex` is recomputed exactly as
+`headunit.logo` does. Growing a file would require repacking MINFS (shifting
+every later offset and directory entry) and is deliberately **out of scope**.
+
+Three edits are supported, all operating on an in-memory `ImageWTY`:
+
+| function | writes | constraint |
+|---|---|---|
+| `set_geometry(img, data_path, widget, x, y, w, h)` | 4×i32 at `name-0x38` | `Str` widgets only (pass `force=True` to write the raw, shifted slot of other kinds) |
+| `set_colors(img, data_path, widget, fg=, alt=)` | u32 at `name-0x24` / `name-0x20` | `Str` only; low 24 bits written, high-byte flags preserved |
+| `set_value(img, data_path, widget, text)` | utf-16z at `name+0xCC` | `Str` only; must fit the original value buffer (zero-padded; refused if too long) |
+
+Each returns a list of `Change` records (image-absolute offset, before/after
+bytes) for verification. The value buffer capacity is the current string plus
+its trailing zero padding, up to the next non-zero field — 200 bytes (0xC8) for
+`ViewShowStrRdsPs`, for example.
+
+CLI:
+
+```
+headunit edit-widget LTTF133.img RadioRds.data ViewShowStrRdsPs \
+    --xywh 100 200 120 40 --fg ff0000 --alt 00ff00 --value "FM 101.1" \
+    --out ./build
+```
+
+This writes `./build/Update/LTTF133.img` and prints the changed byte ranges.
+
+**Verified end-to-end** against the stock image: editing `ViewShowStrRdsPs` in
+`RadioRds.data` (move to `100,200,120×40`, fg→red, value→`"HELLO FM"`) changes
+only the intended widget bytes plus the 4-byte checksum word in `Vdata_udisk.fex`;
+the output is byte-identical elsewhere and the same size, the IMAGEWTY structure
+and the partition checksum both re-validate, and a re-parse reads the new values
+back.
+
+### Crucial caveat — layout edits cannot add functional fields
+
+Repositioning or restyling an **existing** widget is a pure resource edit and
+takes effect on the unit. But making a control display **new runtime data** does
+**not** work from a layout edit alone. The Melis app only populates the view
+controls it already knows about: the app binary `init.axf` holds the code that
+pushes tuner/RDS/clock values into named controls. So, for example, adding a
+functional RadioText (`ViewShowStrRdsRt`, song/artist) field the stock UI lacks
+requires **both** a layout change here **and** corresponding changes to
+`init.axf` so the app fills the new control. A `*.data` edit by itself will only
+ever show the widget's static sample text — do not expect the editor to surface
+data the firmware was not already wired to display.
