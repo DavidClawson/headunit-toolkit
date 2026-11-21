@@ -168,6 +168,34 @@ def cmd_logo(args):
     print("Copy the whole 'Update' folder to a FAT32 USB stick.")
 
 
+def cmd_wallpaper(args):
+    """Build an update image with a custom home-screen wallpaper."""
+    from .wallpaper import set_wallpaper, set_all_wallpapers
+    img = _load_img(args.image)
+    if args.index == "all":
+        made = set_all_wallpapers(img, args.picture, partition=args.partition)
+        total = sum(len(j) for j in made.values())
+        out_img = _write_update(img, args.out)
+        print(f"set all {len(made)} wallpaper slots ({total} bytes total)")
+        for i, jpg in sorted(made.items()):
+            print(f"  /WallPaper/{i}.jpg  {len(jpg)} bytes")
+    else:
+        index = int(args.index)
+        jpg = set_wallpaper(img, index, args.picture, partition=args.partition)
+        out_img = _write_update(img, args.out)
+        print(f"set /WallPaper/{index}.jpg ({len(jpg)} byte wallpaper)")
+    print(f"wrote {out_img}")
+    print("Copy the whole 'Update' folder to a FAT32 USB stick.")
+
+
+def _wallpaper_index(s: str) -> str:
+    if s == "all":
+        return s
+    if s.isdigit() and 0 <= int(s) <= 3:
+        return s
+    raise argparse.ArgumentTypeError("index must be 0, 1, 2, 3, or 'all'")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="headunit", description=__doc__)
     p.add_argument("--version", action="version", version=__version__)
@@ -221,6 +249,16 @@ def main(argv=None):
     s.add_argument("picture", help="your splash image (any format)")
     s.add_argument("outdir", help="output folder (gets an Update/ subfolder)")
     s.set_defaults(func=cmd_logo)
+
+    s = sub.add_parser("wallpaper",
+                       help="build an update image with a custom wallpaper")
+    s.add_argument("image", help="stock LTTF133.img")
+    s.add_argument("index", type=_wallpaper_index,
+                   help="wallpaper slot 0-3, or 'all' to set every slot")
+    s.add_argument("picture", help="your wallpaper image (any format)")
+    s.add_argument("--partition", default="data_udisk.fex")
+    s.add_argument("--out", required=True, help="output folder (gets Update/)")
+    s.set_defaults(func=cmd_wallpaper)
 
     s = sub.add_parser("replace-file",
                        help="replace one MINFS file's bytes (repacks, any size)")

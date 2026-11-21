@@ -38,11 +38,13 @@ headunit ls     stock/LTTF133.img                 # browse the MINFS tree
 headunit cat    stock/LTTF133.img Radio.txt --out radio.txt
 headunit screen stock/LTTF133.img RadioRds.data   # decode a UI screen
 headunit logo   stock/LTTF133.img my.png build/    # build a custom-splash image
+headunit wallpaper stock/LTTF133.img all my.jpg --out build  # swap home wallpaper(s)
 headunit fix-strings stock/LTTF133.img --out build # curated menu-typo fixes
 headunit replace-file stock/LTTF133.img Setup.txt new.bin --out build  # swap any file
 ```
 
-The build commands (`logo`, `fix-strings`, `replace-file`, `edit-widget`) write
+The build commands (`logo`, `wallpaper`, `fix-strings`, `replace-file`,
+`edit-widget`) write
 `build/Update/LTTF133.img`; copy the whole `Update` folder to a FAT32 USB stick
 and follow the vendor's update steps. `fix-strings`/`replace-file` can change a
 file's size — they **repack** the partition (relocating into free space) and fix
@@ -59,6 +61,7 @@ the checksum, so the output is still a drop-in update image.
 | [`docs/factory-menu.md`](docs/factory-menu.md) | factory/engineer access codes + full menu map |
 | [`docs/boot-and-recovery.md`](docs/boot-and-recovery.md) | SD-boot, FEL recovery, a planned boot selector |
 | [`docs/modding-workflow.md`](docs/modding-workflow.md) | versioned variants, bench unit, safety |
+| [`docs/first-flash-bench.md`](docs/first-flash-bench.md) | first-flash bench checklist (USB update, verify, recover) |
 | [`docs/feature-ideas.md`](docs/feature-ideas.md) | demand-backed roadmap (from user-complaint research) |
 | [`docs/legal-and-scope.md`](docs/legal-and-scope.md) | what you can and can't ship |
 
