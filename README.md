@@ -48,6 +48,7 @@ folder to a FAT32 USB stick and follow the vendor's update steps.
 | [`docs/format-minfs.md`](docs/format-minfs.md) | Melis read-only filesystem + checksum |
 | [`docs/format-datav1.md`](docs/format-datav1.md) | compiled UI screen-layout format |
 | [`docs/hardware.md`](docs/hardware.md) | SoC, OS, tuner, CarPlay/AA findings |
+| [`docs/factory-menu.md`](docs/factory-menu.md) | factory/engineer access codes + full menu map |
 | [`docs/boot-and-recovery.md`](docs/boot-and-recovery.md) | SD-boot, FEL recovery, a planned boot selector |
 | [`docs/modding-workflow.md`](docs/modding-workflow.md) | versioned variants, bench unit, safety |
 | [`docs/feature-ideas.md`](docs/feature-ideas.md) | demand-backed roadmap (from user-complaint research) |

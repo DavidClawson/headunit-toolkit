@@ -33,10 +33,11 @@ support**, not missing capability:
   surprised if you run into trouble that nobody can help you solve."*
 
 → The knowledge base this repo produces is itself the highest-value
-deliverable. **Priority 0: find and document our W022 unit's factory/engineer
-code and hidden menu** (hooks: `SetupPassword`, `loginPassword`,
-`PasswordProtected`, `SetupFactory`, "Please enter password" — the default may
-be extractable from `init.axf`).
+deliverable. **Priority 0 — DONE:** the factory/engineer code and full menu map
+are documented in [`factory-menu.md`](factory-menu.md) (factory menu = **113266**,
+boot-logo screen = **112233**; extracted from `init.axf` and independently
+verified). Several Tier-A/B items below turn out to be plain in-menu config
+changes, no flashing — see that doc's roadmap-mapping table.
 
 ## Tier A — do first (high appeal, resource/config-level, low risk)
 
