@@ -46,6 +46,28 @@ default FM screen shows no RDS at all. Getting station name / track requires
 tuner fitted actually decoding RDS, and (c) for track text, UI + app work. See
 [format-datav1.md](format-datav1.md).
 
+**RadioText may be a resource-only mod — to be tested.** `ViewShowStrRdsRt` is
+referenced *by name* inside `init.axf`, right alongside `ViewShowStrRdsPs`
+(station name, which renders fine when placed) / `RdsEn` / `RdsSw`. These apps
+typically update controls by name — "find control X on the active screen, set
+its text." If so, the only reason RadioText is blank is that **no screen
+instantiates the control**, which the MINFS repacker now lets us fix. The cheap
+bench test is `scripts/experiment_rds_radiotext.py` (it places a
+`ViewShowStrRdsRt` control on `RadioRds.data` by renaming the expendable
+PTY-type label); if RadioText appears with no binary patch, now-playing-on-radio
+is a pure resource edit. Pending hardware confirmation.
+
+### Weather band (NOAA) — not possible, hardware limit
+
+NOAA weather radio is **162.400–162.550 MHz** (VHF), above the FM broadcast
+band (≤108 MHz). Every tuner this firmware drives (TEF668x, Si47xx 473x/475x,
+TDA770x, QN8035) is **broadcast-only** — the synthesizer and RF front-end
+cover FM + AM/MW/LW/SW and cannot reach 162 MHz; none is the dedicated NOAA part
+(Si4707). The `init.axf` band enum is FM / AM / MW / SW / LW with region
+band-plans (China, America1/2, Japan, Europe, Korea…) and **no 162-MHz
+frequencies anywhere** (stray `WEATHER`/`WX` strings are fragments of embedded
+base64, not a band). A firmware mod can't add a band the silicon can't tune.
+
 ## CarPlay / Android Auto (the part you can't rebuild)
 
 Implemented as **licensed proprietary modules** loaded at runtime:

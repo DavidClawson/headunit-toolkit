@@ -109,12 +109,24 @@ back.
 ### Crucial caveat — layout edits cannot add functional fields
 
 Repositioning or restyling an **existing** widget is a pure resource edit and
-takes effect on the unit. But making a control display **new runtime data** does
-**not** work from a layout edit alone. The Melis app only populates the view
-controls it already knows about: the app binary `init.axf` holds the code that
-pushes tuner/RDS/clock values into named controls. So, for example, adding a
-functional RadioText (`ViewShowStrRdsRt`, song/artist) field the stock UI lacks
-requires **both** a layout change here **and** corresponding changes to
-`init.axf` so the app fills the new control. A `*.data` edit by itself will only
-ever show the widget's static sample text — do not expect the editor to surface
-data the firmware was not already wired to display.
+takes effect on the unit. But making a control display **new runtime data**
+depends on whether the app already knows how to fill that control. The Melis app
+populates view controls **by name** (`init.axf` holds the code that pushes
+tuner/RDS/clock values into named controls). So the real question for any "show
+X" idea is: *does the app already reference that control name?*
+
+- If **yes** (the name is in `init.axf` but just isn't placed on a screen),
+  then simply **placing** the control may be enough — a pure resource edit, now
+  that [the repacker](format-minfs.md#repacking-writing-files-back) can grow a
+  `*.data` file to add a widget record.
+- If **no**, the control also needs `init.axf` work (RISC-V patching) so the app
+  fills it. A `*.data` edit alone will only ever show the widget's static sample
+  text.
+
+**Worked case — RadioText (`ViewShowStrRdsRt`, song/artist):** the name *is*
+referenced in `init.axf` (next to `ViewShowStrRdsPs`, which renders fine when
+placed), so this is the optimistic first case — plausibly resource-only.
+`scripts/experiment_rds_radiotext.py` builds the test image (it places a
+`ViewShowStrRdsRt` control on `RadioRds.data` by renaming the expendable
+PTY-type label) to confirm on hardware whether the app auto-fills a placed-but-
+previously-absent control. See [hardware.md](hardware.md) → FM tuner & RDS.

@@ -151,7 +151,7 @@ Notes and honest limits:
 |---|---|---|---|
 | **Mic / call-quality tuning** | call quality is a top recurring complaint; *"adjust the microphone volume during a phone call"*, *"adjust microphone sensitivity"* | `SetupAudio`/`SetupDebug`: `AGC Ctrl`, `Noise cancel`, `Noise Threshold`, `Echo cancel`, `Level`, `Max/Min` | likely behind the factory menu → ties to Priority 0 |
 | **Clock persistence** | *"every 2 or 3 days I have to reset the time and date"* | `SetupTime` | sync from GPS/phone instead of relying on RTC |
-| **RDS station name on main screen + RadioText** | *"Lyrics shown from Spotify?"*; general "show what's playing" | `Radio.data`, `RadioRds.data`, `ViewShowStrRdsPs`, (absent) `RdsRt` | needs the DATAV1 *editor*; see [format-datav1.md](format-datav1.md) |
+| **RDS RadioText (song/artist) on the RDS screen** | *"Lyrics shown from Spotify?"*; general "show what's playing" | `RadioRds.data`, `ViewShowStrRdsRt` (in `init.axf`, placed on no screen) | **may be resource-only** — the control name is in `init.axf`; bench test ready in `scripts/experiment_rds_radiotext.py` (see [hardware.md](hardware.md)) |
 | **Backup-cam layout / guide-line toggle** | backup cam is the single most-asked install topic | `Ccd.data`, `CcdBackLine.data` | reclaim screen, toggle guide lines |
 | **Reskin / theming** | *"installed car launcher and it feels like new"*; people want to customize | all `*.data` + `WallPaper/` | validates the whole modding angle |
 
@@ -169,6 +169,10 @@ Internal-amp hiss / weak amp, RAM-bound slowness, screen glare, AM/FM module
 failures, 2.4 GHz-only Wi-Fi radios, power-cycle-on-engine-crank, data-privacy
 concerns about the stock units phoning home (mitigate at the router, not in
 firmware — though documenting *what* it connects to is a fit for the project).
+
+**NOAA weather radio** belongs here too: it's at 162 MHz (VHF), and the fitted
+broadcast tuner (FM/AM/MW/SW/LW only) physically can't tune it — a firmware mod
+can't add a band the silicon can't receive. See [hardware.md](hardware.md).
 
 ## Suggested order
 
