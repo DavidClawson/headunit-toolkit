@@ -50,6 +50,9 @@ and follow the vendor's update steps. `fix-strings`/`replace-file` can change a
 file's size — they **repack** the partition (relocating into free space) and fix
 the checksum, so the output is still a drop-in update image.
 
+For a few ready-made example wallpapers to try, run
+`python3 scripts/make_sample_wallpapers.py` (writes gradients into `samples/`).
+
 ## Documentation
 
 | doc | contents |
