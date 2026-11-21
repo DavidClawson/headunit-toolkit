@@ -6,7 +6,9 @@ complaint and to the firmware hooks we actually found. "Feasibility" is for
 
 ## How this list was built
 
-Two YouTube research passes with `ytscan` (transcripts + top comments):
+Four YouTube research passes with `ytscan` (transcripts + top comments). The
+first two were *complaint*-oriented; the second two were *wishlist*-oriented
+(what people say they want / wish it could do):
 
 - **Scan 1** — `wireless carplay android auto car stereo review problems`
   (12 videos, 641 comments). Skewed toward *portable screens / AI-box
@@ -14,10 +16,18 @@ Two YouTube research passes with `ytscan` (transcripts + top comments):
 - **Scan 2** — `atoto dasaita android double din head unit review problems
   settings` (12 videos, ~400 comments). Clean signal from *installed* units
   (ATOTO, Dasaita, Joying, Teyes, Xtrons).
+- **Scan 3** — `car stereo android auto head unit features I wish it had`
+  (12 videos). Wishlist framing; fed the *Customization & discoverability*
+  section below.
+- **Scan 4** — `double din head unit missing features suggestions mods
+  customization` (12 videos). Same framing, mods/customization angle.
 
-Reddit was blocked (logged-out views return nothing), so this is YouTube-only.
-Raw reports live in the ytscan repo (not committed here). Quotes below are
-representative, not exhaustive.
+Scans 3–4 again skewed toward the pricier Android class (Kenwood, JVC, ATOTO)
+and most transcripts were IP-blocked, so their signal is **comment-based and
+representative, not a clean sample of our tier**. Reddit stayed blocked
+(logged-out views return nothing) across all four. Raw reports live in the
+ytscan repo (not committed here). Quotes below are representative, not
+exhaustive.
 
 ## The biggest unmet need isn't a feature — it's docs
 
@@ -44,9 +54,87 @@ changes, no flashing — see that doc's roadmap-mapping table.
 | idea | demand (quotes) | firmware hooks | notes |
 |---|---|---|---|
 | **Custom boot splash** ✅ done | *"I can't even change the startup logo"* | `Logo/logo1.jpg`, `stalogo1.jpg` | shipped as `headunit logo` |
+| **Shareable config profiles (`factory1.bin`)** | *"every video shows a different menu"*; whole videos just listing codes | `SetupFactory` export/import → `F:\factory1.bin`; all `SetupConfig`/`SetupGain` fields | no flashing — a curated preset of engineer settings, see below |
 | **Volume-curve remap** | *"volume at 2 was too quiet and 3 was super loud"* (multiple) | `SetupGain`, `SetupAudio`, `carplayVolGain` | smooth the step curve; first real patch |
 | **Key / volume beep toggle** | *"how do you get the beeping to stop when you turn the volume up?"* | `SetupBasic`, `TipBox`, `VolumeBar` | likely a flag or a resource swap |
 | **Night brightness floor** | *"screen brightness doesn't go low enough for night driving"* | `SetupBasic`, display cfg | lower the minimum backlight |
+
+### Config profiles via `factory1.bin` — the no-flash distribution vehicle
+
+The factory/engineer menu ([`factory-menu.md`](factory-menu.md)) has a **save /
+export / import** function that writes and reads `factory1.bin` on an SD card
+(the firmware references `F:\factory1.bin`). That one file is the whole set of
+engineer parameters — every `SetupConfig` field (mic/AGC/echo/noise, radio
+region + RDS, power-on volume caps, display voltages) plus the `SetupGain`
+per-source gains. This makes it the **highest-leverage, lowest-risk deliverable
+in the repo**: a complete tuning change ships as a small binary + a one-page
+"enter 113266 → Import" instruction, no image flashing, no bricking risk, and a
+one-tap **Export-first = backup** before anyone touches a setting.
+
+Why it's compelling:
+
+- **Directly answers the loudest complaint** — "every video shows a different
+  menu, worst manual ever." A named, documented profile (e.g. *"balanced
+  volume curve + hotter mic for hands-free calls"*) is exactly the support
+  these units lack.
+- **Bundles several Tier-A/B mods into one artifact** — volume-curve remap, mic
+  /AGC tuning, and radio-region/RDS all live in the same file, so they ship
+  together instead of as separate fiddly menu walkthroughs.
+- **Reversible and portable** — stock `factory1.bin` is the restore point;
+  profiles move between units of the same model by SD card.
+
+What has to be nailed down before shipping one (open work, bench-unit tasks):
+
+1. **Decode the `factory1.bin` format** — field layout, order, and whether it's
+   a flat dump of the config table (likely, given the `<value>\0…\0<key>`
+   descriptor table we already decompressed from `init.axf`) or a packed
+   struct. Confirm whether it carries a checksum/version guard.
+2. **Confirm portability scope** — same model/panel only? A profile that sets
+   `VcomVoltage` or panel-drive values for a different LCD could blank a screen,
+   so profiles must be tagged with the exact model they were captured on.
+3. **Round-trip on the bench unit** — export stock, import unchanged, verify
+   no-op; then export → edit one field offline → import → confirm the change
+   took and nothing else moved. (This is the `factory1.bin` analogue of the
+   `headunit logo` / `edit-widget` byte-diff verification.)
+
+Toolkit angle: once the format is known, a `headunit profile` command could
+read/diff/merge `factory1.bin` files offline — turning hand-tuned settings into
+version-controlled, shareable presets, which is the "patches + guides, bring
+your own agent" distribution model this project is aiming for.
+
+## Customization & discoverability (from the wishlist scans)
+
+Scans 3–4 (wishlist framing) didn't surface new *compute*-heavy asks — this
+tier can't do those anyway — they hardened one cluster: people want to **make it
+theirs** and **find the setting that already exists**. Both are squarely in our
+safe-edit lane (strings, `*.data`, `WallPaper/`, logos) and several double as
+documentation wins ("the option exists — here's where"). Ranked by
+delight-to-risk:
+
+| idea | demand (scan 3–4 quotes) | firmware hooks | effort | new? |
+|---|---|---|---|---|
+| **English / translation polish pack** | the recurring *"I can't find / understand the menu"* theme (*"I want to change the default volume setting, but I can't find it"*) | menu `*.txt` strings (`Setup.txt`, …) | low | **new** — pure string edits, biggest delight-to-risk |
+| **Theme / wallpaper packs** | *"I cannot… change my wallpaper to mimic my phone… I really wish I could"* (+6) | `WallPaper/`, color fields in `*.data` | low | partly (was Tier B "reskin") |
+| **Home-screen layout & shortcut remap** | *"can you change the layout? I don't see that menu option… my screen is split in 3 parts… I want to change it"* (+2) | `SetupMainKey` (factory menu), home `*.data` | low–med | **new** |
+| **Boot-to-source** (auto-enter last source) | boot-speed gripes (*"takes a solid minute to boot… worst part"*); our RTOS boots fast — turn it into a feature | likely a config flag or small `init.axf` nudge | med | **new** |
+| **Now-playing from BT metadata** | *"the only thing I want is an icon to show what's playing"* (+8) | BT AVRCP track/artist → a `*.data` screen + wire-up | med | adjacent to RDS RadioText (Tier B) |
+| **Safer update flow + image validator** | *"the only thing I miss is OTA… using a USB drive is so ancient"* | offline: a `headunit validate` check before copy | low | **new** — can't do true OTA, but can de-risk the USB/SD path |
+
+Notes and honest limits:
+
+- The **logo tool already solves a named pain** from these scans — *"please add
+  the Mitsubishi logo, can't seem to get the size right"* (+3) is exactly what
+  `headunit logo`'s auto-fit (`encode_to_fit`) does. Good validation, not a new
+  item.
+- The single most-upvoted wish in the set was a **home-automation widget**
+  (*"the one widget I want is to open/close the garage door"*, +69). True home
+  automation is **out of scope** — no app runtime on this platform — but the
+  underlying want ("a custom button that does a thing I choose") is partially
+  addressable as a home-screen **shortcut** to a source/screen. Noted for the
+  demand signal; scoped down.
+- **Mic quality** came up again (*"upgrade the mic… cheap omnidirectional picks
+  up background noise"*). The hardware mic is a hardware fix; our contribution is
+  the AGC/noise/echo **tuning** already listed in Tier B and the factory menu.
 
 ## Tier B — worth doing (medium feasibility, some reverse engineering)
 
@@ -76,6 +164,9 @@ firmware — though documenting *what* it connects to is a fit for the project).
 ## Suggested order
 
 Priority 0 (factory code/menu docs) unblocks several Tier-B items, so it comes
-first. Then **volume-curve remap** as the first real binary/resource patch —
-small, high-demand, and a clean proof that config edits work on real hardware
-(bench unit, after a NOR backup).
+first. In parallel, the **Customization & discoverability** items need no bench
+unit and no flashing — the **English/translation polish pack** and **theme/
+wallpaper packs** are pure resource edits that can ship immediately and deliver
+the highest delight-to-risk. Then **volume-curve remap** as the first real
+binary/resource patch — small, high-demand, and a clean proof that config edits
+work on real hardware (bench unit, after a NOR backup).
