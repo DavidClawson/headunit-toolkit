@@ -20,6 +20,9 @@ publishing anything built with it.
 - **Build a custom boot splash** safely: re-encodes your image to fit the
   original slot, rewrites both logo copies, and fixes the partition checksum —
   no other byte moves.
+- **Edit UI screens and menu strings** in place (`edit-widget`), and **repack**
+  the MINFS partition to replace any file with content of a *different* size
+  (`replace-file`) — including a curated menu-typo pass (`fix-strings`).
 
 ## Install
 
@@ -35,10 +38,15 @@ headunit ls     stock/LTTF133.img                 # browse the MINFS tree
 headunit cat    stock/LTTF133.img Radio.txt --out radio.txt
 headunit screen stock/LTTF133.img RadioRds.data   # decode a UI screen
 headunit logo   stock/LTTF133.img my.png build/    # build a custom-splash image
+headunit fix-strings stock/LTTF133.img --out build # curated menu-typo fixes
+headunit replace-file stock/LTTF133.img Setup.txt new.bin --out build  # swap any file
 ```
 
-The `logo` command writes `build/Update/LTTF133.img`; copy the whole `Update`
-folder to a FAT32 USB stick and follow the vendor's update steps.
+The build commands (`logo`, `fix-strings`, `replace-file`, `edit-widget`) write
+`build/Update/LTTF133.img`; copy the whole `Update` folder to a FAT32 USB stick
+and follow the vendor's update steps. `fix-strings`/`replace-file` can change a
+file's size — they **repack** the partition (relocating into free space) and fix
+the checksum, so the output is still a drop-in update image.
 
 ## Documentation
 
@@ -63,6 +71,8 @@ recovery doc.
 
 ## Status
 
-Early. The IMAGEWTY / MINFS / `DATAV1.0` readers and the logo builder are
-verified against a real `LTTF133.img` (26-partition image, model "W022"). The
-boot selector and screen-layout *editing* are designed but not yet built.
+Early. The IMAGEWTY / MINFS / `DATAV1.0` readers, the logo builder, the
+`DATAV1.0` widget editor, and the **MINFS repacker** (resize/replace any file,
+checksum-correct) are verified against a real `LTTF133.img` (26-partition image,
+model "W022"); see `scripts/repack_selftest.py`. The u-boot SD boot selector is
+designed but not yet built.

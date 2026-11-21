@@ -68,11 +68,13 @@ See [hardware.md](hardware.md) for the tuner/RDS side.
 ## Editing (in-place writer)
 
 `headunit.datav1_edit` adds the writer side. A `*.data` file lives inside the
-`data_udisk.fex` MINFS partition at `node.offset`, so **only edits that keep the
-file's byte length unchanged are safe** — nothing moves, and the single
-additive partition checksum in `Vdata_udisk.fex` is recomputed exactly as
-`headunit.logo` does. Growing a file would require repacking MINFS (shifting
-every later offset and directory entry) and is deliberately **out of scope**.
+`data_udisk.fex` MINFS partition at `node.offset`. These editors keep the file's
+byte length unchanged — nothing moves, and the single additive partition
+checksum in `Vdata_udisk.fex` is recomputed exactly as `headunit.logo` does.
+Edits that would **grow** a `*.data` file (e.g. adding a widget record) are not
+done here; route those through `MinFS.repack` instead (see
+[format-minfs.md](format-minfs.md) → *Repacking*), which relocates a grown file
+into the partition's free arena without shifting the others.
 
 Three edits are supported, all operating on an in-memory `ImageWTY`:
 

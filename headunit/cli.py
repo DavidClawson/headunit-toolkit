@@ -107,6 +107,53 @@ def cmd_edit_widget(args):
     print("Copy the whole 'Update' folder to a FAT32 USB stick.")
 
 
+def _write_update(img, outdir: str) -> str:
+    """Write ``img`` to ``<outdir>/Update/LTTF133.img`` and return the path."""
+    out_img = os.path.join(outdir, "Update", "LTTF133.img")
+    os.makedirs(os.path.dirname(out_img), exist_ok=True)
+    with open(out_img, "wb") as fh:
+        fh.write(img.to_bytes())
+    return out_img
+
+
+def cmd_replace_file(args):
+    """Replace one uncompressed MINFS file's bytes and repack the partition."""
+    from .minfs import write_partition
+    img = _load_img(args.image)
+    fs = MinFS(img.read(args.partition))
+    node = fs.find(args.path)
+    with open(args.content, "rb") as fh:
+        new = fh.read()
+    old_off = node.offset
+    new_blob = fs.repack({args.path: new})
+    write_partition(img, new_blob, args.partition,
+                    "V" + args.partition)
+    new_off = MinFS(new_blob).find(args.path).offset
+    where = "in place" if new_off == old_off else f"relocated to {new_off:#x}"
+    out_img = _write_update(img, args.out)
+    print(f"replaced {args.path}: {node.length} -> {len(new)} bytes ({where})")
+    print(f"wrote {out_img}")
+    print("Copy the whole 'Update' folder to a FAT32 USB stick.")
+
+
+def cmd_fix_strings(args):
+    """Apply the curated menu-string typo fixes."""
+    from .strings import fix_strings
+    img = _load_img(args.image)
+    report = fix_strings(img)
+    applied = [r for r in report if r.count]
+    for r in report:
+        tag = f"x{r.count}" if r.count else "— not present, skipped"
+        print(f"  {r.file}: {r.find!r} -> {r.replace!r}  {tag}")
+    if not applied:
+        print("no fixes matched this image; nothing written")
+        return
+    out_img = _write_update(img, args.out)
+    print(f"applied {sum(r.count for r in applied)} substitution(s)")
+    print(f"wrote {out_img}")
+    print("Copy the whole 'Update' folder to a FAT32 USB stick.")
+
+
 def cmd_logo(args):
     from .logo import swap_logo
     img = _load_img(args.image)
@@ -174,6 +221,21 @@ def main(argv=None):
     s.add_argument("picture", help="your splash image (any format)")
     s.add_argument("outdir", help="output folder (gets an Update/ subfolder)")
     s.set_defaults(func=cmd_logo)
+
+    s = sub.add_parser("replace-file",
+                       help="replace one MINFS file's bytes (repacks, any size)")
+    s.add_argument("image", help="stock LTTF133.img")
+    s.add_argument("path", help="MINFS path, e.g. Setup.txt or Logo/logo1.jpg")
+    s.add_argument("content", help="local file with the new bytes")
+    s.add_argument("--partition", default="data_udisk.fex")
+    s.add_argument("--out", required=True, help="output folder (gets Update/)")
+    s.set_defaults(func=cmd_replace_file)
+
+    s = sub.add_parser("fix-strings",
+                       help="apply curated menu-string typo fixes")
+    s.add_argument("image", help="stock LTTF133.img")
+    s.add_argument("--out", required=True, help="output folder (gets Update/)")
+    s.set_defaults(func=cmd_fix_strings)
 
     args = p.parse_args(argv)
     args.func(args)

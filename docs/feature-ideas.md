@@ -113,12 +113,21 @@ delight-to-risk:
 
 | idea | demand (scan 3–4 quotes) | firmware hooks | effort | new? |
 |---|---|---|---|---|
-| **English / translation polish pack** | the recurring *"I can't find / understand the menu"* theme (*"I want to change the default volume setting, but I can't find it"*) | menu `*.txt` strings (`Setup.txt`, …) | low | **new** — pure string edits, biggest delight-to-risk |
+| **English / typo polish** ✅ started | the recurring *"I can't find / understand the menu"* theme | menu `*.txt` strings (`Setup.txt`, …) | low | `headunit fix-strings` ships the curated typo pass; English is otherwise good |
 | **Theme / wallpaper packs** | *"I cannot… change my wallpaper to mimic my phone… I really wish I could"* (+6) | `WallPaper/`, color fields in `*.data` | low | partly (was Tier B "reskin") |
 | **Home-screen layout & shortcut remap** | *"can you change the layout? I don't see that menu option… my screen is split in 3 parts… I want to change it"* (+2) | `SetupMainKey` (factory menu), home `*.data` | low–med | **new** |
 | **Boot-to-source** (auto-enter last source) | boot-speed gripes (*"takes a solid minute to boot… worst part"*); our RTOS boots fast — turn it into a feature | likely a config flag or small `init.axf` nudge | med | **new** |
 | **Now-playing from BT metadata** | *"the only thing I want is an icon to show what's playing"* (+8) | BT AVRCP track/artist → a `*.data` screen + wire-up | med | adjacent to RDS RadioText (Tier B) |
 | **Safer update flow + image validator** | *"the only thing I miss is OTA… using a USB drive is so ancient"* | offline: a `headunit validate` check before copy | low | **new** — can't do true OTA, but can de-risk the USB/SD path |
+
+The honest finding from pulling the actual strings: the stock English is
+**mostly fine** ("Basic Setup", "Factory Set", "Contrast:") — a full
+retranslation isn't warranted. The real defects were a handful of typos
+(`botton`→button ×2, `RDS swich`→switch) and stray whitespace, now fixed by
+`headunit fix-strings`. More importantly, doing it built the **MINFS repacker**
+(`replace-file` / `MinFS.repack`) — the keystone that lets *any* resource be
+replaced at a different size (arbitrary-size logos, wallpapers, themes, future
+translations), checksum-correct, verified by `scripts/repack_selftest.py`.
 
 Notes and honest limits:
 

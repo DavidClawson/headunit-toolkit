@@ -127,3 +127,80 @@ class MinFS:
     def read(self, node: Node | str) -> bytes:
         n = self.find(node) if isinstance(node, str) else node
         return self.data[n.offset:n.offset + n.length]
+
+    # -- repack ------------------------------------------------------------
+    def repack(self, edits: dict, *, align: int = 4) -> bytes:
+        """Return a new partition blob — **the same total size as the
+        original** — with the named files replaced by new content.
+
+        ``edits`` maps a path (or a ``Node``) to the new ``bytes`` for that
+        file. Files whose new content still fits their original slot are
+        rewritten in place; files that grow are relocated into the partition's
+        free *tail arena* (the trailing run of zero bytes). Only the affected
+        directory entries' ``(offset, stored_len, original_len)`` fields are
+        changed — the superblock, the directory structure, and every other
+        file's bytes are preserved exactly.
+
+        Edits are keyed by physical directory entry, so aliased paths (e.g.
+        ``/Setup.txt`` and ``/Language/Setup.txt``, which share one entry)
+        collapse to a single update.
+
+        Raises ``ValueError`` if a target is a directory, is LZMA-compressed
+        (``stored_len != length`` — repacking those would need recompression),
+        or if the free arena cannot hold the growth.
+        """
+        part = bytearray(self.data)
+        total = len(part)
+
+        # Free arena = the trailing run of zero bytes, 4-aligned.
+        tail_zero = total - len(part.rstrip(b"\0"))
+        cursor = (total - tail_zero + align - 1) & ~(align - 1)
+
+        # Resolve paths -> nodes and deduplicate by physical entry offset.
+        resolved: dict[int, tuple[Node, bytes]] = {}
+        for key, content in edits.items():
+            n = self.find(key) if isinstance(key, str) else key
+            if n.is_dir:
+                raise ValueError(f"{key!r} is a directory, not a file")
+            if n.stored_len != n.length:
+                raise ValueError(
+                    f"{key!r} is compressed (stored {n.stored_len} != "
+                    f"len {n.length}); compressed repack is unsupported"
+                )
+            resolved[n.entry_off] = (n, bytes(content))
+
+        for entry_off, (n, new) in resolved.items():
+            size = len(new)
+            if size <= n.stored_len:
+                dst = n.offset            # fits the original slot: write in place
+            else:
+                dst = cursor              # grew: relocate into the free arena
+                if dst + size > total:
+                    raise ValueError(
+                        f"free arena exhausted writing {n.name!r}: need "
+                        f"{size} bytes, only {total - dst} left"
+                    )
+                cursor = (dst + size + align - 1) & ~(align - 1)
+            part[dst:dst + size] = new
+            # entry layout: +0x00 offset, +0x04 stored_len, +0x08 original_len
+            struct.pack_into("<III", part, entry_off, dst, size, size)
+
+        if len(part) != total:  # must never change the partition's footprint
+            raise AssertionError("repack changed the partition size")
+        return bytes(part)
+
+
+def write_partition(img, blob: bytes, part_name: str = "data_udisk.fex",
+                    v_name: str = "Vdata_udisk.fex") -> None:
+    """Write a repacked MINFS ``blob`` into ``img`` (an ``ImageWTY``) in place
+    and fix the paired "V" partition's additive checksum. ``blob`` must be the
+    partition's exact stored length."""
+    part_e = img.get(part_name)
+    v_e = img.get(v_name)
+    if len(blob) != part_e.length:
+        raise ValueError(
+            f"blob is {len(blob)} bytes; partition {part_name} holds "
+            f"{part_e.length}"
+        )
+    img.data[part_e.offset:part_e.offset + part_e.length] = blob
+    struct.pack_into("<I", img.data, v_e.offset, checksum(blob))
