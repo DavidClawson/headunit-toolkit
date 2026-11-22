@@ -70,6 +70,7 @@ For a few ready-made example wallpapers to try, run
 | [`docs/modding-workflow.md`](docs/modding-workflow.md) | versioned variants, bench unit, safety |
 | [`docs/lua-host.md`](docs/lua-host.md) | north-star design: an SD-card Lua scripting host (open app ecosystem) |
 | [`docs/reference/control-inventory.md`](docs/reference/control-inventory.md) | UI control cross-reference (placed vs referenced; dormant features) |
+| [`docs/re-notes.md`](docs/re-notes.md) | deeper RE working notes (link base, Ghidra recipe, module ABI) |
 | [`docs/first-flash-bench.md`](docs/first-flash-bench.md) | first-flash bench checklist (USB update, verify, recover) |
 | [`docs/feature-ideas.md`](docs/feature-ideas.md) | demand-backed roadmap (from user-complaint research) |
 | [`docs/legal-and-scope.md`](docs/legal-and-scope.md) | what you can and can't ship |
