@@ -115,6 +115,7 @@ delight-to-risk:
 |---|---|---|---|---|
 | **English / typo polish** ✅ started | the recurring *"I can't find / understand the menu"* theme | menu `*.txt` strings (`Setup.txt`, …) | low | `headunit fix-strings` ships the curated typo pass; English is otherwise good |
 | **Theme / wallpaper packs** ✅ wallpaper swap shipped | *"I cannot… change my wallpaper to mimic my phone… I really wish I could"* (+6) | `WallPaper/`, color fields in `*.data` | low | `headunit wallpaper` swaps any/all of the four home wallpapers (dimension-matched, repacked); theme color packs still open |
+| **Boot animation (startup video)** | "make it feel custom"; the splash/logo requests generally | `bPlayStartUpVideo`, `startUpVideoPath`, `StartUpVideo.data`, `cedar/psr_video.plg` | med | **new** — firmware has a built-in startup-video player (Cedar H.264); likely config+file, bench-gated. See [hardware.md](hardware.md) |
 | **Home-screen layout & shortcut remap** | *"can you change the layout? I don't see that menu option… my screen is split in 3 parts… I want to change it"* (+2) | `SetupMainKey` (factory menu), home `*.data` | low–med | **new** |
 | **Boot-to-source** (auto-enter last source) | boot-speed gripes (*"takes a solid minute to boot… worst part"*); our RTOS boots fast — turn it into a feature | likely a config flag or small `init.axf` nudge | med | **new** |
 | **Now-playing from BT metadata** | *"the only thing I want is an icon to show what's playing"* (+8) | BT AVRCP track/artist → a `*.data` screen + wire-up | med | adjacent to RDS RadioText (Tier B) |

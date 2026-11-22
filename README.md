@@ -23,6 +23,9 @@ publishing anything built with it.
 - **Edit UI screens and menu strings** in place (`edit-widget`), and **repack**
   the MINFS partition to replace any file with content of a *different* size
   (`replace-file`) — including a curated menu-typo pass (`fix-strings`).
+- **A browser configurator** (`web/`) for the safe edits (splash + live crop
+  preview, wallpaper, typo fixes), running the toolkit client-side via Pyodide —
+  your firmware never leaves the page. See [`web/README.md`](web/README.md).
 
 ## Install
 

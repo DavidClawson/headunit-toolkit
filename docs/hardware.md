@@ -68,6 +68,26 @@ band-plans (China, America1/2, Japan, Europe, Korea…) and **no 162-MHz
 frequencies anywhere** (stray `WEATHER`/`WX` strings are fragments of embedded
 base64, not a band). A firmware mod can't add a band the silicon can't tune.
 
+## Boot splash & startup video (animation is supported)
+
+The early splash is a single static JPEG (`Logo/logo1.jpg` + `stalogo1.jpg`,
+1280×720) — one image slot, not animatable. **But the firmware also has a
+startup-*video* player.** `init.axf` carries `bPlayStartUpVideo` (an on/off
+flag), `startUpVideoPath`, a `StartUpVideo.data` screen, `Animation total
+time %d` / `animationType`, and `Play end,exit startup video`; it references
+`.mp4`/`.avi`/`.gif` and ships the Allwinner **Cedar** hardware video decoder
+(`cedar/psr_video.plg`, plus H.264 paths like `f:\dump-%d.h264`). Removable
+media is probed at `/mnt/%c/%svideo` and `/mnt/%c/%spicture`, and the internal
+startup logo lives at `e:\stalogo.jpg`.
+
+So a **boot animation is feasible as a video clip** (not hand-animated frames) —
+likely a config/resource feature (enable `bPlayStartUpVideo`, supply a clip at
+`startUpVideoPath`) rather than a binary patch. Open questions for the bench
+unit: the exact codec/container/resolution the player expects (Cedar + the
+H.264 paths point at H.264), whether the path is internal (`e:`), removable
+(`/mnt`), or inside the data partition, and whether it's exposed in a menu. See
+the roadmap in [feature-ideas.md](feature-ideas.md).
+
 ## CarPlay / Android Auto (the part you can't rebuild)
 
 Implemented as **licensed proprietary modules** loaded at runtime:

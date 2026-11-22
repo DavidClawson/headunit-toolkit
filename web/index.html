@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Head Unit Configurator</title>
+<meta name="description" content="Patch your own Allwinner F133 car-stereo firmware in the browser — splash, wallpaper and menu fixes. Your firmware never leaves this page.">
+<style>
+  :root {
+    --bg: #f4f5f7; --panel: #ffffff; --ink: #1a1d23; --muted: #5c6370;
+    --line: #e2e5ea; --accent: #1f7a8c; --accent-ink: #ffffff;
+    --ok: #1f8a4c; --warn: #b4690e; --err: #c0392b; --code: #f0f2f5;
+    --radius: 12px;
+  }
+  :root:not([data-theme="light"]) {
+    @media (prefers-color-scheme: dark) {
+      --bg:#14161a; --panel:#1c1f26; --ink:#e7e9ee; --muted:#9aa1ad;
+      --line:#2a2e37; --accent:#4fb3c7; --accent-ink:#06222a; --code:#11141a;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg:#14161a; --panel:#1c1f26; --ink:#e7e9ee; --muted:#9aa1ad;
+    --line:#2a2e37; --accent:#4fb3c7; --accent-ink:#06222a; --code:#11141a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    padding: 16px;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; }
+  h1 { font-size: 1.5rem; margin: .2em 0 .1em; }
+  .sub { color: var(--muted); margin: 0 0 1rem; }
+  .privacy {
+    background: color-mix(in srgb, var(--accent) 12%, var(--panel));
+    border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
+    border-radius: var(--radius); padding: .6rem .85rem; margin-bottom: 1rem;
+    font-size: .9rem;
+  }
+  .card {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 1rem 1.1rem; margin-bottom: 1rem;
+  }
+  .card h2 { font-size: 1rem; margin: 0 0 .7rem; display:flex; gap:.5rem; align-items:center; }
+  .step { display:inline-grid; place-items:center; width:1.5rem; height:1.5rem;
+    border-radius:50%; background:var(--accent); color:var(--accent-ink);
+    font-size:.8rem; font-weight:700; }
+  label.row { display:flex; gap:.6rem; align-items:center; margin:.5rem 0; flex-wrap:wrap; }
+  input[type=file] { max-width:100%; }
+  select, button {
+    font: inherit; border-radius: 8px; border: 1px solid var(--line);
+    background: var(--panel); color: var(--ink); padding: .4rem .6rem;
+  }
+  .drop {
+    border: 2px dashed var(--line); border-radius: var(--radius);
+    padding: 1.4rem; text-align:center; color: var(--muted); cursor:pointer;
+    transition: border-color .15s, background .15s;
+  }
+  .drop.hot { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--panel)); }
+  button.primary {
+    background: var(--accent); color: var(--accent-ink); border-color: transparent;
+    font-weight: 600; padding: .55rem 1.1rem; cursor: pointer;
+  }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .pill { font-size: .8rem; padding: .15rem .55rem; border-radius: 999px;
+    border: 1px solid var(--line); color: var(--muted); }
+  .pill.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, var(--line)); }
+  .pill.err { color: var(--err); border-color: color-mix(in srgb, var(--err) 40%, var(--line)); }
+  #log {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85rem;
+    background: var(--code); border-radius: 8px; padding: .7rem .85rem; margin-top:.7rem;
+    white-space: pre-wrap; word-break: break-word; min-height: 1.5rem;
+  }
+  .muted { color: var(--muted); font-size: .85rem; }
+  a { color: var(--accent); }
+  .hidden { display: none; }
+  code { background: var(--code); padding: .05rem .35rem; border-radius: 5px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Head Unit Configurator <span class="pill" id="runtime">starting…</span></h1>
+  <p class="sub">Patch your own <strong>LTTF133.img</strong> (Allwinner F133 / Melis) with safe, reversible edits, then flash it the normal way.</p>
+
+  <div class="privacy">
+    🔒 <strong>Your firmware never leaves this page.</strong> Everything runs
+    locally in your browser (Python compiled to WebAssembly). Nothing is uploaded.
+  </div>
+
+  <div class="card">
+    <h2><span class="step">1</span> Load your firmware</h2>
+    <div class="drop" id="drop">
+      <div id="dropText">Drop <code>LTTF133.img</code> here, or click to choose</div>
+      <input type="file" id="imgInput" accept=".img,application/octet-stream" class="hidden">
+    </div>
+    <div class="muted" id="imgInfo" style="margin-top:.6rem">Use the original image the vendor sent you — keep a copy as your restore point.</div>
+  </div>
+
+  <div class="card" id="optsCard" style="opacity:.55; pointer-events:none;">
+    <h2><span class="step">2</span> Choose edits</h2>
+    <label class="row"><input type="checkbox" id="optTypos"> Fix menu typos (<code>botton</code>→button, <code>RDS swich</code>→switch)</label>
+    <label class="row">Boot splash: <input type="file" id="optSplash" accept="image/*"> <span class="muted">(any image; cropped to 1280×720)</span></label>
+    <canvas id="splashPrev" class="hidden" width="1280" height="720"
+            style="width:100%;max-width:360px;aspect-ratio:16/9;border:1px solid var(--line);border-radius:8px;margin:.2rem 0 .7rem;"></canvas>
+    <label class="row">Wallpaper: <input type="file" id="optWall" accept="image/*">
+      <select id="optWallSlot">
+        <option value="all">all four slots</option>
+        <option value="0">slot 0</option><option value="1">slot 1</option>
+        <option value="2">slot 2</option><option value="3">slot 3</option>
+      </select>
+    </label>
+  </div>
+
+  <div class="card">
+    <h2><span class="step">3</span> Build &amp; download</h2>
+    <button class="primary" id="buildBtn" disabled>Build patched image</button>
+    <a id="dl" class="hidden"></a>
+    <div id="log">Waiting for the Python runtime to finish loading…</div>
+    <p class="muted" id="flashHint" style="margin-bottom:0">
+      After download: put the file in an <code>Update/</code> folder on a FAT32 USB
+      stick (so it's <code>Update/LTTF133.img</code>) and run the vendor update.
+      See <code>docs/first-flash-bench.md</code>.
+    </p>
+  </div>
+
+  <p class="muted">Prototype · safe resource edits only (splash, wallpaper, strings). Boot-chain and module work stay on the command line / bench unit. Keep your stock image — every edit here is reversible by reflashing it.</p>
+</div>
+
+<script type="module">
+const PYODIDE = "https://cdn.jsdelivr.net/pyodide/v0.26.4/full/";
+const MODULES = ["__init__","imagewty","minfs","datav1","datav1_edit","logo","wallpaper","strings"];
+
+const $ = (id) => document.getElementById(id);
+const runtimePill = $("runtime"), logEl = $("log");
+let pyodide = null, imageBytes = null, ready = false;
+
+function log(msg){ logEl.textContent = msg; }
+function setRuntime(text, cls){ runtimePill.textContent = text; runtimePill.className = "pill" + (cls ? " "+cls : ""); }
+
+async function boot(){
+  try {
+    setRuntime("loading runtime…");
+    const { loadPyodide } = await import(PYODIDE + "pyodide.mjs");
+    pyodide = await loadPyodide({ indexURL: PYODIDE });
+    setRuntime("loading imaging…");
+    await pyodide.loadPackage("pillow");
+    setRuntime("loading toolkit…");
+    pyodide.FS.mkdirTree("headunit");
+    for (const m of MODULES){
+      const r = await fetch(`../headunit/${m}.py`);
+      if (!r.ok) throw new Error(`could not fetch headunit/${m}.py (serve the repo root over http)`);
+      pyodide.FS.writeFile(`headunit/${m}.py`, await r.text());
+    }
+    const conf = await fetch("./configurator.py");
+    if (!conf.ok) throw new Error("could not fetch configurator.py");
+    pyodide.FS.writeFile("configurator.py", await conf.text());
+    pyodide.runPython("import sys; sys.path.insert(0,'')\nimport configurator");
+    ready = true;
+    setRuntime("ready", "ok");
+    log("Ready. Load your firmware to begin.");
+    refresh();
+  } catch (e){
+    setRuntime("failed", "err");
+    log("Runtime failed to load:\n" + e + "\n\nThis page must be served over http (e.g. `python3 -m http.server` from the repo root, then open /web/). Opening the file directly won't work.");
+  }
+}
+
+function refresh(){
+  const haveImg = !!imageBytes;
+  $("optsCard").style.opacity = haveImg ? "1" : ".55";
+  $("optsCard").style.pointerEvents = haveImg ? "auto" : "none";
+  $("buildBtn").disabled = !(ready && haveImg);
+}
+
+// --- firmware input (click + drag/drop) ---
+const drop = $("drop"), imgInput = $("imgInput");
+drop.addEventListener("click", () => imgInput.click());
+["dragover","dragenter"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("hot"); }));
+["dragleave","drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("hot"); }));
+drop.addEventListener("drop", e => { const f = e.dataTransfer.files[0]; if (f) loadImage(f); });
+imgInput.addEventListener("change", e => { const f = e.target.files[0]; if (f) loadImage(f); });
+
+async function loadImage(file){
+  try {
+    const buf = new Uint8Array(await file.arrayBuffer());
+    if (!ready){ imageBytes = buf; $("imgInfo").textContent = `${file.name} — ${(buf.length/1048576).toFixed(1)} MB (runtime still loading…)`; refresh(); return; }
+    pyodide.globals.set("PEEK", buf);
+    const n = pyodide.runPython(`from headunit.imagewty import ImageWTY\nImageWTY(bytes(PEEK.to_py())).num_files`);
+    imageBytes = buf;
+    $("dropText").innerHTML = `✓ <code>${file.name}</code> loaded`;
+    $("imgInfo").textContent = `Parsed OK — ${n} partitions, ${(buf.length/1048576).toFixed(1)} MB.`;
+    log("Firmware loaded. Choose your edits, then Build.");
+    refresh();
+  } catch (e){
+    imageBytes = null;
+    $("imgInfo").textContent = "That doesn't look like a valid LTTF133 image: " + e;
+    refresh();
+  }
+}
+
+// --- live splash preview: exact 1280x720 center-crop (matches ImageOps.fit) ---
+$("optSplash").addEventListener("change", e => {
+  const f = e.target.files[0], c = $("splashPrev");
+  if (!f){ c.classList.add("hidden"); return; }
+  const im = new Image();
+  im.onload = () => {
+    const W = 1280, H = 720, ctx = c.getContext("2d");
+    const s = Math.max(W/im.width, H/im.height);       // "cover" scale
+    const dw = im.width*s, dh = im.height*s;
+    ctx.clearRect(0,0,W,H);
+    ctx.drawImage(im, (W-dw)/2, (H-dh)/2, dw, dh);      // center-crop
+    c.classList.remove("hidden");
+    URL.revokeObjectURL(im.src);
+  };
+  im.src = URL.createObjectURL(f);
+});
+
+async function readOpt(inputId){
+  const f = $(inputId).files[0];
+  return f ? new Uint8Array(await f.arrayBuffer()) : null;
+}
+
+$("buildBtn").addEventListener("click", async () => {
+  if (!(ready && imageBytes)) return;
+  $("buildBtn").disabled = true;
+  log("Building… (this runs entirely in your browser)");
+  try {
+    pyodide.globals.set("IMAGE", imageBytes);
+    pyodide.globals.set("SPLASH", await readOpt("optSplash"));
+    pyodide.globals.set("WP", await readOpt("optWall"));
+    pyodide.globals.set("FIX", $("optTypos").checked);
+    pyodide.globals.set("SLOT", $("optWallSlot").value);
+    const logProxy = pyodide.runPython(`
+import configurator
+_img = bytes(IMAGE.to_py())
+_sp = bytes(SPLASH.to_py()) if SPLASH is not None else None
+_wp = bytes(WP.to_py()) if WP is not None else None
+_out, _log = configurator.apply(_img, fix_typos=FIX, splash=_sp, wallpaper=_wp, wallpaper_slot=SLOT)
+with open("/out.img", "wb") as _f: _f.write(_out)
+_log
+`);
+    const outBytes = pyodide.FS.readFile("/out.img");  // -> Uint8Array
+    const lines = logProxy.toJs();                      // Python list -> Array<string>
+    logProxy.destroy?.();
+    const blob = new Blob([outBytes], { type: "application/octet-stream" });
+    const a = $("dl");
+    a.href = URL.createObjectURL(blob);
+    a.download = "LTTF133.img";
+    a.className = "primary";
+    a.textContent = "⬇ Download LTTF133.img";
+    a.style.display = "inline-block";
+    a.style.marginLeft = ".6rem";
+    log(lines.join("\n") + `\n\n✓ Built ${(outBytes.length/1048576).toFixed(1)} MB. Download ready.`);
+  } catch (e){
+    log("Build failed:\n" + e);
+  } finally {
+    $("buildBtn").disabled = false;
+  }
+});
+
+boot();
+</script>
+</body>
+</html>
