@@ -31,6 +31,11 @@ STRING_FIXES: dict[str, list[tuple[str, str]]] = {
         ("botton", "button"),            # "Click panel botton…" — typo (x2)
         ("RDS swich", "RDS switch"),      # "RDS swich" — typo
         ("Mirroring\xa0", "Mirroring"),  # stray non-breaking space (x2)
+        # Fullwidth colon U+FF1A leaking into English labels (all other
+        # colon-bearing English labels use ASCII ':'). Byte-verified unique.
+        ("Input password：", "Input password:"),
+        ("Treble：", "Treble:"),
+        ("Version：", "Version:"),
     ],
 }
 

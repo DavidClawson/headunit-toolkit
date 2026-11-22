@@ -7,6 +7,22 @@ confirming the menu-typo fixes landed and the unit still boots. This touches
 only the MINFS resource partition — low risk, reversible by reflashing stock
 (see [`modding-workflow.md`](modding-workflow.md) risk tiers).
 
+## 0. Powering the unit on the bench
+
+Before any flashing, just get it to boot on the bench:
+
+1. **Bench supply at ~12V** (car nominal is 12–14.4V; 12.5 is fine). Set a
+   **current limit** of ~3–5A so a short trips the supply instead of cooking
+   anything. A 7" unit draws roughly 0.5–1A idle, more with the panel lit.
+2. **Tie B+ and ACC together to +12V.** These units have both a constant
+   **B+/BATT** line and a switched **ACC/IGN** line; if ACC is left floating the
+   unit often stays in standby and "won't turn on." Wiring both to +12V and the
+   ground wire to the supply's negative is the fix — this is the #1 bench gotcha.
+3. **No speakers needed** — screen, touch, and the USB port are all this test
+   uses. (Leaving speaker outputs unconnected is fine; don't short them.)
+4. Confirm it boots to the stock home screen and the USB port reads a stick
+   before you flash anything.
+
 ## 1. Pre-flight
 
 1. **Stash the restore point.** Copy the vendor's original `LTTF133.img`
@@ -16,9 +32,10 @@ only the MINFS resource partition — low risk, reversible by reflashing stock
    ```sh
    headunit fix-strings stock/LTTF133.img --out build
    ```
-   This writes `build/Update/LTTF133.img` (curated menu-typo pass: `botton`→
-   `button`, `RDS swich`→`RDS switch`, and the stray non-breaking space on
-   "R-CAM/F-CAM Mirroring").
+   This writes `build/Update/LTTF133.img` (curated menu-typo pass, 6 fixes:
+   `botton`→`button`, `RDS swich`→`RDS switch`, the stray non-breaking space on
+   "R-CAM/F-CAM Mirroring", and three fullwidth-colon labels
+   `Input password：`/`Treble：`/`Version：` → ASCII `:`).
 3. **Copy the whole folder.** Put the entire `build/Update/` folder onto a
    freshly **FAT32**-formatted USB stick (keep the `Update/` directory name and
    structure — the vendor flow looks for it).

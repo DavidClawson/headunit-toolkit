@@ -33,6 +33,16 @@ that for a compressed file `length` is the *decompressed* size, so a raw
 `read()` returns `length` bytes and over-reads past the `stored_len` on disk;
 the repacker refuses compressed targets for this reason.
 
+> **`init.axf` is not a single LZMA stream.** It's **three concatenated raw
+> LZMA1 blocks**, each a 5-byte header `5d 00 80 00 00` (props `0x5d` →
+> lc=3,lp=0,pb=2; dict `0x8000`) followed by the stream with **no 8-byte
+> uncompressed-size field** (omitted, not zeroed). In the stock image the magics
+> sit at stored offsets `0 / 798684 / 944608`. Decode each `block[5:]` with
+> Python `lzma.decompress(..., format=lzma.FORMAT_RAW, filters=[{"id":
+> lzma.FILTER_LZMA1, "dict_size": 1<<26}])` and concatenate → exactly 2,081,328
+> bytes. The older "single stream, splice `ff`×8 as the size" recipe fails on
+> this file. (The Melis `.mod`/`.drv` modules *are* single LZMA_ALONE streams.)
+
 ## Partition checksum (the only integrity check)
 
 Each MINFS partition has a partner `V*` partition (`Vdata_udisk.fex`) holding a
@@ -87,7 +97,17 @@ invariant above is checked end-to-end by `scripts/repack_selftest.py`.
 
 ## Notable contents of `data_udisk.fex`
 
-- `/Font30_4Bit.vft` — the 30px UI font.
+- `/Font30_4Bit.vft` — the 30px UI font. **Not TrueType** — a proprietary
+  `VIFT` bitmap glyph atlas (header `VIFT` in UTF-16LE), 30px / 4-bit
+  anti-aliased, with all ~33 languages' CJK+Latin glyphs baked in (3.63 MB).
+  Changing the typeface means regenerating the whole atlas, not swapping a font
+  file.
+- Asset note: **every screen, image, text table and the font is uncompressed**
+  (only `init.axf` + the Melis `.mod/.drv/.plg` modules are LZMA) — so all UI
+  resources are directly repack-moddable. There are **no loose UI bitmaps**:
+  button/slider art is embedded inside the compiled `*.data` screens. The only
+  standalone rasters are the 4 logos, 4 wallpapers (`1024×600`, panel-native)
+  and 3 CarPlay/AA store icons.
 - `/init.axf` — the whole application (stripped RISC-V, LZMA-compressed).
 - `/Language/*.txt` — UTF-16LE string tables (tab-separated, ~30 languages).
 - `/Logo/logo1..4.jpg` + a second `stalogo1.jpg` — the boot/splash images.

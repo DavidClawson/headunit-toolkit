@@ -67,6 +67,7 @@ For a few ready-made example wallpapers to try, run
 | [`docs/factory-menu.md`](docs/factory-menu.md) | factory/engineer access codes + full menu map |
 | [`docs/boot-and-recovery.md`](docs/boot-and-recovery.md) | SD-boot, FEL recovery, a planned boot selector |
 | [`docs/modding-workflow.md`](docs/modding-workflow.md) | versioned variants, bench unit, safety |
+| [`docs/lua-host.md`](docs/lua-host.md) | north-star design: an SD-card Lua scripting host (open app ecosystem) |
 | [`docs/first-flash-bench.md`](docs/first-flash-bench.md) | first-flash bench checklist (USB update, verify, recover) |
 | [`docs/feature-ideas.md`](docs/feature-ideas.md) | demand-backed roadmap (from user-complaint research) |
 | [`docs/legal-and-scope.md`](docs/legal-and-scope.md) | what you can and can't ship |

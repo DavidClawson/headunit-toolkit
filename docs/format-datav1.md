@@ -58,12 +58,39 @@ config in `sys_config_nor.fex`: `lcd_x=720`, `lcd_y=1280`), so x can run to
 - The plain FM screen (`Radio.data`) has **no RDS fields** — only frequency,
   band slider and 6 presets. That's why a stock unit shows just the frequency.
 - `ViewShowStrRdsPs` (station name) exists on the RDS sub-screen.
-- `ViewShowStrRdsRt` (RadioText = song/artist) is **defined in the app binary
-  but placed on no screen** (0 occurrences across all `*.data`). Surfacing
-  now-playing text therefore needs both a new widget record *and* confirmation
-  that the app fills the control from the tuner's RDS 2A/2B decode.
+- `ViewShowStrRdsRt` (RadioText = song/artist) is **referenced by the app binary
+  but placed on no screen**. Confirmed by cross-reference (below): the name sits
+  in `init.axf` at offset 1450828, directly between `ViewShowStrRdsPs` and
+  `ViewShowStrRdsEn` — and `RadioRds.data` is shipped. So RadioText is a
+  **missing field on an existing screen**, the cheapest class of mod.
 
 See [hardware.md](hardware.md) for the tuner/RDS side.
+
+## Referenced-vs-placed: finding the moddable controls
+
+A whole-image analysis cross-references two sets: every `ViewShow*` control name
+**referenced by name in `init.axf`** (the app knows how to fill it) against every
+name **placed on a screen** across all 60 `*.data` files.
+
+- **983** distinct control names referenced in `init.axf`.
+- **337** distinct names actually placed on a screen.
+- **647** referenced-but-not-placed — the dormant set.
+
+The 647 split into two very different categories, and the distinction is what
+decides effort:
+
+| category | what it is | effort | examples |
+|---|---|---|---|
+| **Missing field on a shipped screen** | the screen `.data` exists; the control just isn't placed on it | **low** — place one widget + repack | RDS extras: `ViewShowStrRdsRt` (RadioText), `…RdsEn`, `…PtyEn`, `…AfEn`, `…TaEn` on `RadioRds.data` |
+| **Whole dormant screen** | the app references a screen whose `.data` isn't shipped at all | **high** — author a new screen *and* the hardware must exist | `Dab.data` (DAB radio), `CarInfoBattery.data` (EV/battery telemetry), TPMS tire-pressure (~21 controls, no screen), `EclinkWireless.data`, `MainLinkMirror.data` |
+
+**Caveat that matters:** `init.axf` is a **shared multi-SKU codebase**. The
+dormant whole-screen features (DAB, TPMS, EV/battery telemetry, EcLink) are UI
+for hardware that **isn't fitted on this cheap model** — no tire sensors, no CAN
+feed, no DAB-capable tuner variant wired. Authoring their screens would show
+static placeholders, not live data. They mark the platform's ceiling, not easy
+wins. The genuine opportunities are the *missing-field* rows, where the hardware
+(FM tuner + RDS) is present and already feeding the sibling controls.
 
 ## Editing (in-place writer)
 
@@ -123,10 +150,14 @@ X" idea is: *does the app already reference that control name?*
   fills it. A `*.data` edit alone will only ever show the widget's static sample
   text.
 
-**Worked case — RadioText (`ViewShowStrRdsRt`, song/artist):** the name *is*
-referenced in `init.axf` (next to `ViewShowStrRdsPs`, which renders fine when
-placed), so this is the optimistic first case — plausibly resource-only.
-`scripts/experiment_rds_radiotext.py` builds the test image (it places a
-`ViewShowStrRdsRt` control on `RadioRds.data` by renaming the expendable
-PTY-type label) to confirm on hardware whether the app auto-fills a placed-but-
-previously-absent control. See [hardware.md](hardware.md) → FM tuner & RDS.
+**Worked case — RadioText (`ViewShowStrRdsRt`, song/artist):** both halves of
+the "resource-only?" test now check out from static analysis — the name *is*
+referenced in `init.axf` (offset 1450828, between `ViewShowStrRdsPs`, which
+renders fine when placed, and `ViewShowStrRdsEn`), and its screen `RadioRds.data`
+*is* shipped. So this is a **missing field on an existing screen** — the most
+optimistic case, plausibly pure resource. `scripts/experiment_rds_radiotext.py`
+builds the test image (it places a `ViewShowStrRdsRt` control on `RadioRds.data`
+by renaming the expendable PTY-type label); the one thing static analysis can't
+settle is whether the app auto-fills a placed-but-previously-absent control from
+the tuner's RDS 2A/2B decode — that's the bench test. See
+[hardware.md](hardware.md) → FM tuner & RDS.

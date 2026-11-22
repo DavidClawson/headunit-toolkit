@@ -46,7 +46,10 @@ support**, not missing capability:
 deliverable. **Priority 0 — DONE:** the factory/engineer code and full menu map
 are documented in [`factory-menu.md`](factory-menu.md) (factory menu = **113266**,
 boot-logo screen = **112233**; extracted from `init.axf` and independently
-verified). Several Tier-A/B items below turn out to be plain in-menu config
+verified — the firmware's own key names are `factoryPaswword`/`logoPassword`,
+their typo. There's also a boot-login code `0000` gated by `bStartUpEnterLogin`,
+and **five undocumented hard-coded 6-digit codes** near the menu/calib logic —
+`001106, 112345, 230762, 123579, 666666` — purpose unknown, a bench-probe item). Several Tier-A/B items below turn out to be plain in-menu config
 changes, no flashing — see that doc's roadmap-mapping table.
 
 ## Tier A — do first (high appeal, resource/config-level, low risk)
@@ -113,9 +116,9 @@ delight-to-risk:
 
 | idea | demand (scan 3–4 quotes) | firmware hooks | effort | new? |
 |---|---|---|---|---|
-| **English / typo polish** ✅ started | the recurring *"I can't find / understand the menu"* theme | menu `*.txt` strings (`Setup.txt`, …) | low | `headunit fix-strings` ships the curated typo pass; English is otherwise good |
+| **English / typo polish** ✅ started | the recurring *"I can't find / understand the menu"* theme | menu `*.txt` strings (`Setup.txt`, …) | low | `headunit fix-strings` ships the curated typo pass (now **6 fixes**: `botton`→button, `RDS swich`→switch, stray NBSP, + three fullwidth-colon `：`→`:` labels); English is otherwise good and 0 English cells are untranslated |
 | **Theme / wallpaper packs** ✅ wallpaper swap shipped | *"I cannot… change my wallpaper to mimic my phone… I really wish I could"* (+6) | `WallPaper/`, color fields in `*.data` | low | `headunit wallpaper` swaps any/all of the four home wallpapers (dimension-matched, repacked); theme color packs still open |
-| **Boot animation (startup video)** | "make it feel custom"; the splash/logo requests generally | `bPlayStartUpVideo`, `startUpVideoPath`, `StartUpVideo.data`, `cedar/psr_video.plg` | med | **new** — firmware has a built-in startup-video player (Cedar H.264); likely config+file, bench-gated. See [hardware.md](hardware.md) |
+| **Boot animation (startup video)** | "make it feel custom"; the splash/logo requests generally | `bPlayStartUpVideo`, `startUpVideoPath`, `StartUpVideo.data`, `cedar/psr_video.plg` | med | **new** — built-in startup-video player (Cedar HW decode). **Format:** supply an **H.264 `.mp4` (or raw `.h264`) ≤1280×720**, or a `.gif` for simple animation; path can be internal `e:\…` or a USB/SD mount. Config+file, not a binary patch — bench-gated on the path toggle (set via factory menu). See [hardware.md](hardware.md) |
 | **Home-screen layout & shortcut remap** | *"can you change the layout? I don't see that menu option… my screen is split in 3 parts… I want to change it"* (+2) | `SetupMainKey` (factory menu), home `*.data` | low–med | **new** |
 | **Boot-to-source** (auto-enter last source) | boot-speed gripes (*"takes a solid minute to boot… worst part"*); our RTOS boots fast — turn it into a feature | likely a config flag or small `init.axf` nudge | med | **new** |
 | **Now-playing from BT metadata** | *"the only thing I want is an icon to show what's playing"* (+8) | BT AVRCP track/artist → a `*.data` screen + wire-up | med | adjacent to RDS RadioText (Tier B) |
@@ -152,7 +155,7 @@ Notes and honest limits:
 |---|---|---|---|
 | **Mic / call-quality tuning** | call quality is a top recurring complaint; *"adjust the microphone volume during a phone call"*, *"adjust microphone sensitivity"* | `SetupAudio`/`SetupDebug`: `AGC Ctrl`, `Noise cancel`, `Noise Threshold`, `Echo cancel`, `Level`, `Max/Min` | likely behind the factory menu → ties to Priority 0 |
 | **Clock persistence** | *"every 2 or 3 days I have to reset the time and date"* | `SetupTime` | sync from GPS/phone instead of relying on RTC |
-| **RDS RadioText (song/artist) on the RDS screen** | *"Lyrics shown from Spotify?"*; general "show what's playing" | `RadioRds.data`, `ViewShowStrRdsRt` (in `init.axf`, placed on no screen) | **may be resource-only** — the control name is in `init.axf`; bench test ready in `scripts/experiment_rds_radiotext.py` (see [hardware.md](hardware.md)) |
+| **RDS RadioText (song/artist) on the RDS screen** | *"Lyrics shown from Spotify?"*; general "show what's playing" | `RadioRds.data`, `ViewShowStrRdsRt` (referenced in `init.axf` @1450828, placed on no screen) | **strong resource-only candidate — both static halves confirmed** (name referenced next to `RdsPs`; its screen is shipped → a *missing field*, not a dormant screen). Only the app-auto-fill question is left; bench test ready in `scripts/experiment_rds_radiotext.py` (see [hardware.md](hardware.md)) |
 | **Backup-cam layout / guide-line toggle** | backup cam is the single most-asked install topic | `Ccd.data`, `CcdBackLine.data` | reclaim screen, toggle guide lines |
 | **Reskin / theming** | *"installed car launcher and it feels like new"*; people want to customize | all `*.data` + `WallPaper/` | validates the whole modding angle |
 
@@ -174,6 +177,25 @@ firmware — though documenting *what* it connects to is a fit for the project).
 **NOAA weather radio** belongs here too: it's at 162 MHz (VHF), and the fitted
 broadcast tuner (FM/AM/MW/SW/LW only) physically can't tune it — a firmware mod
 can't add a band the silicon can't receive. See [hardware.md](hardware.md).
+
+**Dormant multi-SKU features (code present, hardware absent).** `init.axf` is a
+shared codebase across many head-unit models, so it references whole feature
+suites this cheap unit can't drive: **DAB digital radio**, **TPMS tire-pressure**
+(~21 controls), **EV/battery & engine telemetry** (needs a CAN feed),
+**FM-transmit**, and **EcLink/Mirror** phone-link variants. The control cross-
+reference ([format-datav1.md](format-datav1.md)) shows these are referenced but
+placed on **no screen** (their `.data` isn't even shipped) — and the enabling
+hardware (tire sensors, CAN bus, DAB tuner variant) isn't on the board. Authoring
+their screens would show static placeholders, not live data. Worth knowing so
+nobody chases them as quick wins; the genuine resource-only wins are *missing
+fields on shipped screens* (RadioText, RDS extras) where the hardware is present.
+
+**Custom EQ sound (not the UI).** A full 10-band graphic EQ already ships
+(`SetupAudio.data`, presets incl. a **User** slot); its *screen* is re-skinnable,
+but the preset **curves/band frequencies live in `init.axf` + a hardware-DSP
+`best1400_eq.bin`**, so actually re-voicing the sound is a binary/DSP patch, not
+a resource edit. The moddable opportunity here is cosmetic (relabel/restyle),
+not acoustic.
 
 ## Suggested order
 
