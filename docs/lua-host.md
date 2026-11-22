@@ -127,12 +127,11 @@ rule intact:
 Everything rides on the keystone — **produce a loadable Melis module and get it
 loaded.** Ordered:
 
-1. **RE the module format + loader ABI.** What *is* a `.mod` binary (ELF? custom
-   Melis container?), and how does `esMODS_Install` consume it? `carplay.mod` is
-   a worked example to dissect. **Prerequisite tooling:** the toolkit needs a
-   *module decompressor* first — the `.mod`/`.drv`/`.plg` are LZMA-framed and the
-   repacker currently refuses compressed targets (see
-   [format-minfs.md](format-minfs.md)).
+1. **RE the module format + loader ABI.** Partly done: the *module decompressor*
+   exists (`headunit decompress`), and it establishes the format is a **custom
+   Melis container, not ELF** (see Open questions). Remaining: map the container's
+   field layout and how `esMODS_Install` consumes it. `auto.mod` (decodes
+   exactly) is the cleanest worked example to dissect.
 2. **Hello-world module that loads** — the real proof. Converges with the
    [HAL-explorer probe](boot-and-recovery.md#hardware-probing--hal-access-talk-to-the-board-directly):
    the first module you load is naturally a diagnostic REPL.
@@ -142,10 +141,14 @@ loaded.** Ordered:
 
 ## Open research questions
 
-- **Module binary format** — ELF vs custom? Not obviously ELF, and **no
-  RT-Thread / `dlmodule` fingerprints** were found in `init.axf`, so we probably
-  *don't* get the format for free from open RT-Thread tooling (Melis is
-  RT-Thread-derived but has diverged). Expect custom RE. First task.
+- **Module binary format — answered: custom Melis container, not ELF.** With the
+  toolkit's new decompressor (`headunit decompress`), `auto.mod` decodes exactly
+  and its header is a custom Melis container (`97 ?? 0? 00  93 87 …`) with
+  internal `MAGIC`/`VERSION`/`MOD_` fields — *not* an ELF `.so`, and **no
+  RT-Thread/`dlmodule` fingerprints**, so there's no off-the-shelf toolchain.
+  Emitting this container (and matching the `esMODS_Install` loader's
+  expectations) is the core RE task. Remaining sub-question: fully decode
+  `carplay.mod`/`*.plg` (partial today) and map the container's field layout.
 - **Is the module-load list data-driven or hardcoded?** If the stock app loads
   its modules from a manifest/config of paths (like `d:\mod\cedar.mod`), we might
   register our host as a **pure resource edit** — no `init.axf` patch. If the

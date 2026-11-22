@@ -5,7 +5,7 @@ import argparse
 import os
 import sys
 
-from . import ImageWTY, MinFS, DataV1, __version__
+from . import ImageWTY, MinFS, DataV1, decompress_node, __version__
 
 
 def _load_img(path: str) -> ImageWTY:
@@ -50,6 +50,22 @@ def cmd_cat(args):
         print(f"wrote {len(data)} bytes to {args.out}")
     else:
         sys.stdout.buffer.write(data)
+
+
+def cmd_decompress(args):
+    img = _load_img(args.image)
+    fs = MinFS(img.read(args.partition))
+    d = decompress_node(fs, args.path)
+    status = "complete" if d.complete else f"PARTIAL ({d.error or 'short'})"
+    print(f"{args.path}: {d.blocks} LZMA block(s), "
+          f"{d.original_len} bytes expected, {len(d.data)} recovered — {status}",
+          file=sys.stderr)
+    if args.out:
+        with open(args.out, "wb") as fh:
+            fh.write(d.data)
+        print(f"wrote {len(d.data)} bytes to {args.out}", file=sys.stderr)
+    else:
+        sys.stdout.buffer.write(d.data)
 
 
 def cmd_screen(args):
@@ -221,6 +237,14 @@ def main(argv=None):
     s.add_argument("--partition", default="data_udisk.fex")
     s.add_argument("--out")
     s.set_defaults(func=cmd_cat)
+
+    s = sub.add_parser("decompress",
+                       help="decompress a LZMA-packed MINFS payload (init.axf, *.mod/.drv/.plg)")
+    s.add_argument("image")
+    s.add_argument("path", help="MINFS path, e.g. init.axf or /auto.mod")
+    s.add_argument("--partition", default="data_udisk.fex")
+    s.add_argument("--out", help="write to file (else stdout)")
+    s.set_defaults(func=cmd_decompress)
 
     s = sub.add_parser("screen", help="decode a DATAV1.0 screen layout")
     s.add_argument("image")

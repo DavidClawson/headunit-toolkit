@@ -27,11 +27,24 @@ robust across the images seen.
 
 Directory records are laid out back-to-back inside the parent's data region;
 a zero record length ends the list. Some payloads are LZMA-compressed in place
-(`stored < original`, e.g. `init.axf`, `carplay.mod`, `cedar/*.drv`); the
-toolkit currently reads file bytes raw — decompression helpers are a TODO. Note
-that for a compressed file `length` is the *decompressed* size, so a raw
-`read()` returns `length` bytes and over-reads past the `stored_len` on disk;
-the repacker refuses compressed targets for this reason.
+(`stored < original`, e.g. `init.axf`, `carplay.mod`, `cedar/*.drv`). Note that
+for a compressed file `length` is the *decompressed* size, so a raw `read()`
+returns `length` bytes and over-reads past the `stored_len` on disk; the repacker
+refuses compressed targets for this reason. To get the real bytes, use the
+decompressor: `headunit decompress <img> <path> --out <file>`, or
+`headunit.decompress_node(mfs, path)` (reads `offset..offset+stored_len` and
+decodes). It reproduces `init.axf` and `auto.mod` **exactly**; `carplay.mod`,
+`cedar/vdecoder.drv`, and the tiny `cedar/*.plg` come back short/partial (a false
+magic inside compressed data, or a small-plugin framing variant) and are returned
+with a `complete=False` flag rather than silently trusted — cracking those fully
+is the remaining TODO.
+
+**What's inside the packed payloads:** **not ELF.** `init.axf` is a stripped
+Melis RISC-V application. The `.mod`/`.drv` modules share a **custom Melis
+container** header (`97 ?? 0? 00  93 87 …`) with internal `MAGIC` / `VERSION` /
+`MOD_` fields (and "Melis"/"module" strings). So a hypothetical home-grown
+loadable module ([lua-host.md](lua-host.md)) must emit *that* container, not a
+standard ELF `.so` — there's no off-the-shelf toolchain for it.
 
 > **`init.axf` is not a single LZMA stream.** It's **three concatenated raw
 > LZMA1 blocks**, each a 5-byte header `5d 00 80 00 00` (props `0x5d` →
