@@ -70,3 +70,42 @@ project for fast `-process` re-runs without re-analyzing.
 These are interactive-RE shaped (follow xrefs, rename, read the live decompiler),
 so the efficient venue is the **Ghidra GUI** (import with the recipe above), and
 hypotheses are cheaply confirmed by loading a test module on the **bench unit**.
+
+## Radios & Bluetooth transport (the OBD-II / network question)
+
+Grepping the decompressed `init.axf` + the whole image for the radio stack:
+
+- **Combo WiFi+BT chip.** The `[wifi_para]` config block has `wifi_used = 1`
+  and `wifi_mod_sel = 3`, which the in-file legend maps to **`rtl8723as`
+  (wifi+bt)** on SDIO (`wifi_sdc_id = 1`); the kernel cmdline carries both
+  `wifi_mac` and `bt_mac`. So the unit has **both WiFi and Bluetooth Classic**
+  at the silicon level (one combo module). This is the radio behind wireless
+  CarPlay/AA.
+- **RFCOMM/SPP machinery is present in `init.axf`.** There's a Bluetooth serial
+  command protocol: `RecCmd_Scan`, `RecCmd_RemoteAddr %s`, `RecCmd_UUID %s`,
+  `RecCmd_RfcommData error %d,%d`, plus `open_file_bt`, `RecCmd_ProgramInfo` /
+  `RecCmd_AllProgramInfo` / `RecCmd_Picture …checksum`. Shape = a **vendor
+  companion-app channel** (scan → connect to a remote address on a UUID →
+  exchange raw RFCOMM bytes; also pushes radio "program" info + album-art
+  pictures to a phone app). RFCOMM/SPP is exactly the transport a cheap
+  **Bluetooth ELM327 OBD-II dongle** speaks.
+- **No BNEP / PAN.** Zero `bnep`/`pan`/`tether` strings anywhere → **no
+  Bluetooth tethering stack**. Routing internet *through the phone over BT* is
+  not a firmware path (and iPhones dropped BT-PAN regardless). The sane network
+  path for a host/script is **WiFi** (join the phone's hotspot or home AP), not
+  Bluetooth.
+- **No OBD/CAN built in.** No `obd`/`elm327`/`can`/`dtc` strings — expected; this
+  is a pure aftermarket head unit with no CAN tap. A BT ELM327 dongle is
+  therefore *the* way to get live vehicle data, and all of it goes over the SPP
+  transport above.
+- **Module surface is larger than the 13-slot list.** `insmod d:\mod\display.mod`
+  and `insmod d:\mod\orange.mod` show up in the image beyond the catalogued
+  `d:\mod\*.mod` slots — the loadable-module set is bigger than we'd mapped.
+
+**Open RE (gates an OBD app):** is that `RecCmd_*` SPP client **general-purpose**
+(point it at an arbitrary device address + UUID and stream bytes — what an
+ELM327 app needs) or **hardwired** to the vendor companion-app protocol? If
+reusable, a host module wraps it; if not, drive the RTL8723AS BT stack a layer
+lower. Also open: does this stack hold a **second** simultaneous BT device (the
+OBD dongle) alongside the phone, and how does WiFi/BT coexistence behave — both
+bench tests. See the two candidate apps in [lua-host.md](lua-host.md).

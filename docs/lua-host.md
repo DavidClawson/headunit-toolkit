@@ -81,6 +81,8 @@ Mapped to our confirmed device map:
 | **Sound playback** | feasible | host wraps audio-out (internal codec); script plays tones/clips; polite mixing with the main path needs care |
 | **Microphone** | maybe / contended | AC108 mic array as buffer reads for light uses (VU meter, level trigger); the call/CarPlay subsystem likely owns this path, and heavy DSP won't fit one core |
 | **Car telemetry (read-only)** | bonus | host surfaces FM freq / RDS text / clock / volume from app state so scripts can *react* |
+| **Bluetooth serial (SPP/RFCOMM)** | promising, gated | the firmware already has RFCOMM machinery (`RecCmd_Scan/RemoteAddr/UUID/RfcommData`, see [re-notes.md](re-notes.md)); if that client is reusable, the host exposes `bt.open(addr, uuid)` → byte stream — enough to talk to an **ELM327 OBD-II dongle**. Open RE: general-purpose vs. vendor-bound |
+| **Network (WiFi)** | feasible | the unit has WiFi (RTL8723AS combo); host exposes sockets/HTTP to scripts that joined the phone hotspot or home AP. **Not** Bluetooth — there's no BT-PAN/tether stack ([re-notes.md](re-notes.md)) |
 | **I²C / GPIO** | gate behind a capability | possible but lock it so a script can't wedge a bus the system needs (e.g. MFi on TWI2) |
 
 ## The sandbox / watchdog model (the reason to pick an interpreter)
@@ -122,16 +124,61 @@ rule intact:
   install. An open app ecosystem for a dashboard, with a how-to-write-a-script
   guide as the on-ramp.
 
+## Candidate flagship apps
+
+Two concrete first-wave apps that ride the HAL surface above and double as the
+"why this platform is cool" demos. Both are **clean-room** (no proprietary code)
+and ride radios the unit already has ([re-notes.md](re-notes.md)).
+
+### 1. OBD-II diagnostics (the flagship)
+
+A Bluetooth **ELM327** dongle speaks SPP/RFCOMM — the exact transport the
+firmware already contains. Vehicle data over an open serial link, no CAN tap, no
+internet, no licensed anything.
+
+- **Design it as a "Diagnostic mode," not a live overlay.** The user enters it
+  while parked: the host connects the dongle, does its work, disconnects. This
+  **sidesteps the big open question** — whether the Melis BT stack can hold the
+  OBD dongle *and* the phone (CarPlay) connected at once. BT Classic is
+  multipoint and wireless CarPlay's heavy data is on WiFi, so concurrency *may*
+  work, but it isn't proven; diagnostic mode doesn't need it. A live background
+  gauge cluster is a **stretch goal** that ships only if the bench proves the
+  stack tolerates a second device + WiFi/BT coexistence.
+- **Read codes** (OBD mode `03`) → show stored/pending DTCs.
+- **Clear codes** (OBD mode `04`) → one tap. **UX caveat to surface:** clearing
+  also resets emissions-readiness monitors, which can mask a real fault or fail
+  an inspection if done right before a smog test. Warn, don't block.
+- **Auto-detect the car** (OBD mode `09`, PID `02`) → read the **VIN**, decode
+  the WMI prefix to make/model/year *offline* — labels the session and targets
+  the help links with no user input.
+- **Offline diagnosis pack** — a JSON file on the SD card mapping generic P-codes
+  → plain-English cause + common fixes; optional per-make packs for `P1xxx`.
+- **QR → YouTube (offline-first).** The head unit needs no internet: it renders a
+  QR pointing at a YouTube search for `<code> <make> <model>`; the *phone* scans
+  it and does the browsing. Live gauges drawn with DATAV1 screens, data from the
+  dongle — a complete flow that works with zero connectivity.
+- **Open RE before building:** is the `RecCmd_*` SPP client general-purpose or
+  vendor-bound (see [re-notes.md](re-notes.md))? That gates the transport.
+
+### 2. WiFi network API
+
+For apps that genuinely want the internet (weather, now-playing art, a web
+dashboard), the path is **WiFi**, not Bluetooth — the unit has a WiFi+BT combo
+chip but **no BT-PAN/tether** stack. The host exposes sockets/HTTP to scripts
+once the unit has joined the phone's hotspot or a home AP. Lower priority than
+OBD (needs the user to manage a WiFi join), but it's the clean answer to "can a
+script make a network request?" — yes, over WiFi.
+
 ## Dependency chain / milestones
 
 Everything rides on the keystone — **produce a loadable Melis module and get it
 loaded.** Ordered:
 
 1. **RE the module format + loader ABI.** Partly done: the *module decompressor*
-   exists (`headunit decompress`), and it establishes the format is a **custom
-   Melis container, not ELF** (see Open questions). Remaining: map the container's
-   field layout and how `esMODS_Install` consumes it. `auto.mod` (decodes
-   exactly) is the cleanest worked example to dissect.
+   exists (`headunit decompress`), and it establishes the format is a **raw PIC
+   RISC-V image, not ELF and not a container** (see Open questions). Remaining:
+   map the **trailer reloc/symbol tables** and how `esMODS_Install` consumes
+   them. `auto.mod` (decodes exactly) is the cleanest worked example to dissect.
 2. **Hello-world module that loads** — the real proof. Injection is already
    solved at the **resource level**: emit the raw PIC image, place it at an
    unused `d:\mod\` slot (e.g. `oak.mod`) with the repacker, and stock `init.axf`
