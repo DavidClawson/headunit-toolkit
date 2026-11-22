@@ -11,6 +11,15 @@ redistributes vendor firmware or the proprietary CarPlay / Android Auto
 modules. See [`docs/legal-and-scope.md`](docs/legal-and-scope.md) before
 publishing anything built with it.
 
+> ⚠️ **Status: early work — static-analysis findings, hardware validation in
+> progress.** The parsers, the logo/wallpaper/string tools, and the format specs
+> are verified against a real `LTTF133.img`. But most of the deeper findings
+> (boot chain, loadable-module format, Bluetooth/OBD ideas, the Lua-host design)
+> are **reverse-engineered from the firmware and not yet confirmed on hardware** —
+> a bench unit is on the way and these will be tested and corrected. Treat the
+> RE notes as working hypotheses, keep your original firmware, and see
+> [Safety](#safety-in-one-line) before flashing anything.
+
 ## What it does today
 
 - **Parse / unpack** the IMAGEWTY image and list its sub-partitions.
@@ -84,8 +93,21 @@ recovery doc.
 
 ## Status
 
-Early. The IMAGEWTY / MINFS / `DATAV1.0` readers, the logo builder, the
-`DATAV1.0` widget editor, and the **MINFS repacker** (resize/replace any file,
-checksum-correct) are verified against a real `LTTF133.img` (26-partition image,
-model "W022"); see `scripts/repack_selftest.py`. The u-boot SD boot selector is
-designed but not yet built.
+**Early, and actively being tested.** Two tiers:
+
+- **Verified against a real `LTTF133.img`** (26-partition image, model "W022"):
+  the IMAGEWTY / MINFS / `DATAV1.0` readers, the logo builder, the `DATAV1.0`
+  widget editor, the LZMA payload decompressor, and the **MINFS repacker**
+  (resize/replace any file, checksum-correct) — see `scripts/repack_selftest.py`.
+  The factory-menu codes and the container/filesystem/screen format specs are
+  high-confidence.
+- **Reverse-engineered, not yet hardware-validated:** the open-boot-chain
+  analysis, the loadable-module (`.mod`) format and injection path, the
+  Bluetooth/OBD-II findings, and the Lua-host design. These come from static
+  analysis of the stock image; a **bench unit is inbound** and they'll be
+  confirmed or corrected on real hardware. The u-boot SD boot selector is
+  designed but not yet built.
+
+Contributions, corrections, and especially **"I tried this on my unit and…"**
+reports are very welcome — this is exactly the stage where real-hardware data is
+most valuable.

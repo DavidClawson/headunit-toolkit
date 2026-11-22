@@ -1,8 +1,9 @@
 # UI control inventory & cross-reference (stock LTTF133.img)
 
 Reference data from the whole-image static analysis. These are **structural
-identifiers** (control names) and counts — not vendor UI text. Everything here is
-regenerable from a stock image with the toolkit (see [Regenerating](#regenerating)).
+identifiers** (control names) and counts — not vendor UI text — reproduced here
+as facts for interoperability, and regenerable from a stock image with the
+toolkit (see [Regenerating](#regenerating)).
 
 - [`controls-placed.txt`](controls-placed.txt) — **337** distinct `ViewShow*`
   names actually placed on a screen, across all 60 `*.data` files.
