@@ -132,7 +132,10 @@ loaded.** Ordered:
    Melis container, not ELF** (see Open questions). Remaining: map the container's
    field layout and how `esMODS_Install` consumes it. `auto.mod` (decodes
    exactly) is the cleanest worked example to dissect.
-2. **Hello-world module that loads** — the real proof. Converges with the
+2. **Hello-world module that loads** — the real proof. Injection is already
+   solved at the **resource level**: emit the raw PIC image, place it at an
+   unused `d:\mod\` slot (e.g. `oak.mod`) with the repacker, and stock `init.axf`
+   loads it at boot — no code patch. Converges with the
    [HAL-explorer probe](boot-and-recovery.md#hardware-probing--hal-access-talk-to-the-board-directly):
    the first module you load is naturally a diagnostic REPL.
 3. **Host + embedded Lua** — the VM, the sandbox, the API bindings.
@@ -141,23 +144,37 @@ loaded.** Ordered:
 
 ## Open research questions
 
-- **Module binary format — answered: custom Melis container, not ELF.** With the
-  toolkit's new decompressor (`headunit decompress`), `auto.mod` decodes exactly
-  and its header is a custom Melis container (`97 ?? 0? 00  93 87 …`) with
-  internal `MAGIC`/`VERSION`/`MOD_` fields — *not* an ELF `.so`, and **no
-  RT-Thread/`dlmodule` fingerprints**, so there's no off-the-shelf toolchain.
-  Emitting this container (and matching the `esMODS_Install` loader's
-  expectations) is the core RE task. Remaining sub-question: fully decode
-  `carplay.mod`/`*.plg` (partial today) and map the container's field layout.
+- **Module binary format — answered: raw PIC RISC-V image, no magic header.**
+  With the toolkit's decompressor (`headunit decompress`), `auto.mod` decodes
+  exactly: it opens directly with position-independent code (`auipc a5,…; addi;
+  …; ret`), not a container header. (The `MAGIC`/`VERSION`/`MOD_` tokens were a
+  red herring — OpenSSL strings statically linked into `auto.mod`.) There's **no
+  ELF, no RT-Thread/`dlmodule`, no magic/signature gate** — the loader just maps
+  the blob and calls in. Remaining RE: map the **trailer tables** (likely
+  relocation/symbol) and what `esMODS_Install` consumes, so we can *emit* a valid
+  module. Toolchain target: **Melis 4.x-release-1.2**, framework
+  `livedesk/beetles` (from a build-path leak).
+- **Module injection — answered, and better than hoped: resource-level.** The
+  loader walks a **fixed list of 13 `d:\mod\*.mod` slots**, but only 3 ship
+  (`auto`, `carplay`, `cedar`). The other **10 are referenced-but-absent**
+  (`oak`, `pace`, `miracast`, `wireless`, `update`, `carlife`, `eclink`,
+  `sensor_play`, `vcoder`, `video_play`) — the app tries each, logs "no X.mod",
+  and continues. So **placing our host module at an unused slot via the MINFS
+  repacker gets it loaded at boot with NO `init.axf` patch** — a pure resource
+  edit, from internal `d:` storage. Caveat: the app may call that slot's expected
+  entry points for its nominal feature, so the host must satisfy or safely no-op
+  that interface (bench-test which slot is quietest; `oak`/`pace` are unknown and
+  likely dormant). This collapses milestone 2's "very hard" path to "hard".
 - **Is the module-load list data-driven or hardcoded?** If the stock app loads
   its modules from a manifest/config of paths (like `d:\mod\cedar.mod`), we might
   register our host as a **pure resource edit** — no `init.axf` patch. If the
   list is hardcoded, injection needs a code patch. This single question is the
   difference between "hard" and "very hard" for milestone 2.
-- **Host injection vs coexistence** — patch a hook in stock `init.axf` to start
-  our loader (preserves the stock UI + CarPlay), or replace `init.axf` with our
-  own host (must then re-host everything, losing CarPlay). The hook-into-stock
-  path is preferred for preserving projection.
+- **Host injection — largely answered:** drop the host at an unused `d:\mod\`
+  slot (above); stock `init.axf`, UI, and CarPlay stay intact and the app loads
+  our module itself. No code patch, no re-hosting. Open sub-question: which slot
+  the app installs but then leaves alone (so it doesn't call an interface we must
+  emulate) — a bench test.
 - **Audio/mic ownership** — can the host share the codec/mic with the call and
   CarPlay subsystems, or only when they're idle?
 

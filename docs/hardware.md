@@ -9,8 +9,20 @@ bench unit, it says so.
 - **SoC:** Allwinner **F133** = the **D1s** — a single-core 64-bit **RISC-V**
   (XuanTie C906, `rv64gc`). Confirmed in the boot chain: C-SKY RISC-V
   toolchain string, "Bad Linux RISCV Image magic", `riscv64-unknown-linux-gnu`.
-- **OS:** Allwinner **Melis** RTOS (RT-Thread based; "EPOS"). The binaries leak
-  source paths like `ekernel/arch/riscv/rv64gc/mmu/module.c` — useful for RE.
+- **OS:** Allwinner **Melis** RTOS (RT-Thread based; "EPOS"), **version
+  4.x-release-1.2** (from a build-path leak in `auto.mod`). The app is built on
+  Melis's **`livedesk/beetles`** application framework (`…/beetles/CarApp/Build/
+  F133_Melis/…`). Binaries leak source paths like
+  `ekernel/arch/riscv/rv64gc/mmu/module.c` — useful for RE.
+- **Loadable modules:** the app pulls native code at runtime via the `esMODS_*`
+  loader from a **fixed list of `d:\mod\*.mod` slots** (13 named: auto, carplay,
+  cedar, carlife, eclink, miracast, oak, pace, sensor_play, update, vcoder,
+  video_play, wireless). Only 3 ship in the image (`auto`, `carplay`, `cedar`);
+  the rest are absent and skipped gracefully. Modules are **raw
+  position-independent RISC-V images** (no ELF/magic header — see
+  [format-minfs.md](format-minfs.md)); `auto.mod` even statically links OpenSSL.
+  The unused slots are a resource-level injection surface — see
+  [lua-host.md](lua-host.md).
 - **App:** one stripped RISC-V binary, `init.axf` (2,081,328 bytes; three
   concatenated raw-LZMA1 blocks inside MINFS — see
   [format-minfs.md](format-minfs.md)), built against the Melis exported API.

@@ -39,12 +39,25 @@ magic inside compressed data, or a small-plugin framing variant) and are returne
 with a `complete=False` flag rather than silently trusted — cracking those fully
 is the remaining TODO.
 
-**What's inside the packed payloads:** **not ELF.** `init.axf` is a stripped
-Melis RISC-V application. The `.mod`/`.drv` modules share a **custom Melis
-container** header (`97 ?? 0? 00  93 87 …`) with internal `MAGIC` / `VERSION` /
-`MOD_` fields (and "Melis"/"module" strings). So a hypothetical home-grown
-loadable module ([lua-host.md](lua-host.md)) must emit *that* container, not a
-standard ELF `.so` — there's no off-the-shelf toolchain for it.
+**What's inside the packed payloads:** **not ELF, and not a container with a
+file-header magic.** `init.axf` and the `.mod`/`.drv` modules are **raw
+position-independent RISC-V code+data images** — they open directly with PIC
+code (`auipc a5, imm; addi a5, a5, imm; … ; ret` — so the leading `97 ?? 0? 00`
+bytes are an `auipc` instruction, not a magic number), with the data/string
+section following and trailer tables (likely relocation/symbol) at the end. The
+loader (`esMODS_*`) maps the blob and calls into it; there is no ELF header to
+parse.
+
+> Earlier note corrected: the `MAGIC`/`VERSION`/`MOD_` tokens first spotted in
+> `auto.mod` are **OpenSSL** strings (`RC2_MAGIC_TO_METH`, `TLS_MAX_VERSION`,
+> `RSA_NULL_MOD_EXP`) — `auto.mod` statically links OpenSSL for Android Auto's
+> TLS — *not* a module header. A build-path leak inside it even names the
+> toolchain: `melis-4.x-release-1.2 … livedesk/beetles/CarApp`.
+
+Emitting a home-grown loadable module ([lua-host.md](lua-host.md)) therefore
+means producing this raw PIC image in whatever layout `esMODS_Install` expects
+(trailer tables still to be mapped) — there's no off-the-shelf ELF toolchain for
+it, but also no magic/signature gate.
 
 > **`init.axf` is not a single LZMA stream.** It's **three concatenated raw
 > LZMA1 blocks**, each a 5-byte header `5d 00 80 00 00` (props `0x5d` →
