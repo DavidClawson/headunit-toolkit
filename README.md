@@ -27,6 +27,12 @@ publishing anything built with it.
 > confirmed on hardware. Keep your original firmware; see
 > [Safety](#safety-in-one-line) before flashing anything.
 
+**▶ Try it in your browser:**
+**[the configurator](https://davidclawson.github.io/headunit-toolkit/web/)** — drop
+your own `LTTF133.img`, pick safe edits (boot splash, wallpaper, menu text),
+download a patched image. It runs entirely client-side (Pyodide/WASM); **your
+firmware is never uploaded.**
+
 ## What it does today
 
 - **Parse / unpack** the IMAGEWTY image and list its sub-partitions.
@@ -72,6 +78,25 @@ the checksum, so the output is still a drop-in update image.
 
 For a few ready-made example wallpapers to try, run
 `python3 scripts/make_sample_wallpapers.py` (writes gradients into `samples/`).
+
+## Roadmap — what we know, what we're doing
+
+**Working now (validated on real hardware):** custom boot splash, wallpaper, and
+user-facing menu text / translations — all **flash-and-go over USB**, no case
+opening, CarPlay/Android Auto preserved.
+
+**In progress / exploring (iterating in public):**
+- Browser configurator — adding vendor-ZIP in/out and a menu-relabel &
+  translation editor (the newly-validated lane).
+- Shareable engineer **config profiles** (`factory1.bin`) — decoding the format.
+- Deeper reverse engineering (see [`docs/devlog.md`](docs/devlog.md) and
+  [`docs/re-notes.md`](docs/re-notes.md)): the loadable-module format, a planned
+  SD-card **Lua scripting host**, and **Bluetooth/OBD-II** ideas. These are **not
+  yet hardware-validated** and are the "advanced" track — *not* required for the
+  flash-and-go tools above.
+
+Contributions and **"I tried this on my unit and…"** reports are very welcome —
+this is exactly the stage where real-hardware data is most valuable.
 
 ## Documentation
 
