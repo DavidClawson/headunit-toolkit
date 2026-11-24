@@ -158,21 +158,21 @@ async function boot(){
     await pyodide.loadPackage("pillow");
     setRuntime("loading toolkit…");
     step = "mkdir";
-    pyodide.FS.mkdirTree("headunit");
+    pyodide.FS.mkdirTree("/app/headunit");
     for (const m of MODULES){
       step = "fetch:" + m;
       const r = await fetch(`../headunit/${m}.py?v=${ASSET_V}`);
       if (!r.ok) throw new Error(`could not fetch headunit/${m}.py (serve the repo root over http)`);
       step = "write:" + m;
-      pyodide.FS.writeFile(`headunit/${m}.py`, await r.text());
+      pyodide.FS.writeFile(`/app/headunit/${m}.py`, await r.text());
     }
     step = "fetch:configurator";
     const conf = await fetch(`./configurator.py?v=${ASSET_V}`);
     if (!conf.ok) throw new Error("could not fetch configurator.py");
     step = "write:configurator";
-    pyodide.FS.writeFile("configurator.py", await conf.text());
+    pyodide.FS.writeFile("/app/configurator.py", await conf.text());
     step = "import-configurator";
-    pyodide.runPython("import sys; sys.path.insert(0,'')\nimport configurator");
+    pyodide.runPython("import sys; sys.path.insert(0,'/app')\nimport configurator");
     ready = true;
     setRuntime("ready", "ok");
     log("Ready. Load your firmware to begin.");
