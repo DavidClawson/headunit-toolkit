@@ -134,7 +134,8 @@
       <label class="row">Boot splash: <input type="file" id="optSplash" accept="image/*"></label>
       <div id="splashEditor" class="editor hidden">
         <canvas id="splashCanvas" width="1280" height="720"></canvas>
-        <label class="row muted">Drag to position · <input type="range" id="splashZoom" min="1" max="3" step="0.01" value="1"> zoom — this frame is exactly the 1280×720 boot screen.</label>
+        <div class="row"><span class="muted">Drag · scroll to zoom</span><input type="range" id="splashZoom" min="1" max="3" step="0.01" value="1"><button type="button" id="splashReset">Reset</button></div>
+        <div class="muted" style="font-size:.78rem;margin-top:-.2rem">This frame is exactly the 1280×720 boot screen.</div>
       </div>
     </div>
 
@@ -148,7 +149,8 @@
       </label>
       <div id="wallEditor" class="editor hidden">
         <canvas id="wallCanvas" width="1024" height="600"></canvas>
-        <label class="row muted">Drag to position · <input type="range" id="wallZoom" min="1" max="3" step="0.01" value="1"> zoom — this frame is exactly the 1024×600 home screen.</label>
+        <div class="row"><span class="muted">Drag · scroll to zoom</span><input type="range" id="wallZoom" min="1" max="3" step="0.01" value="1"><button type="button" id="wallReset">Reset</button></div>
+        <div class="muted" style="font-size:.78rem;margin-top:-.2rem">This frame is exactly the 1024×600 home screen.</div>
       </div>
     </div>
   </div>
@@ -248,11 +250,18 @@ async function loadImage(file){
 // --- interactive image editor: drag to position + slider to zoom, WYSIWYG ---
 // The canvas is the exact slot resolution, so what you see is what gets written.
 class ImageEditor {
-  constructor(canvasId, zoomId, wrapId){
+  constructor(canvasId, zoomId, wrapId, resetId){
     this.c = $(canvasId); this.zoomEl = $(zoomId); this.wrap = $(wrapId);
     this.outW = this.c.width; this.outH = this.c.height;
     this.img = null; this.scale = 1; this.ox = 0; this.oy = 0; this.base = 1;
     this.zoomEl.addEventListener("input", () => { this.scale = parseFloat(this.zoomEl.value); this.draw(); });
+    $(resetId).addEventListener("click", () => this.reset());
+    this.c.addEventListener("wheel", ev => {
+      if(!this.img) return; ev.preventDefault();
+      const lo = parseFloat(this.zoomEl.min), hi = parseFloat(this.zoomEl.max);
+      this.scale = Math.min(hi, Math.max(lo, this.scale * (ev.deltaY < 0 ? 1.08 : 1/1.08)));
+      this.zoomEl.value = String(this.scale); this.draw();
+    }, {passive:false});
     let drag = null;
     const k = () => this.outW / (this.c.getBoundingClientRect().width || this.outW);
     this.c.addEventListener("pointerdown", ev => { if(!this.img) return; drag = {x:ev.clientX, y:ev.clientY, ox:this.ox, oy:this.oy, k:k()}; this.c.setPointerCapture(ev.pointerId); });
@@ -273,6 +282,7 @@ class ImageEditor {
     im.src = URL.createObjectURL(file);
   }
   clear(){ this.img = null; this.wrap.classList.add("hidden"); }
+  reset(){ this.scale = 1; this.ox = 0; this.oy = 0; this.zoomEl.value = "1"; this.draw(); }
   hasImage(){ return !!this.img; }
   draw(){
     const ctx = this.c.getContext("2d");
@@ -285,8 +295,8 @@ class ImageEditor {
     return new Promise(res => this.c.toBlob(b => b.arrayBuffer().then(a => res(new Uint8Array(a))), "image/jpeg", 0.95));
   }
 }
-const splashEd = new ImageEditor("splashCanvas","splashZoom","splashEditor");
-const wallEd   = new ImageEditor("wallCanvas","wallZoom","wallEditor");
+const splashEd = new ImageEditor("splashCanvas","splashZoom","splashEditor","splashReset");
+const wallEd   = new ImageEditor("wallCanvas","wallZoom","wallEditor","wallReset");
 $("optSplash").addEventListener("change", e => { const f = e.target.files[0]; f ? splashEd.load(f) : splashEd.clear(); });
 $("optWall").addEventListener("change", e => { const f = e.target.files[0]; f ? wallEd.load(f) : wallEd.clear(); });
 
