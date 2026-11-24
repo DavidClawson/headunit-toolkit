@@ -7,7 +7,12 @@ tools operate on an image *you* supply.
 from .imagewty import ImageWTY, FileEntry
 from .minfs import MinFS, Node, checksum, write_partition
 from .datav1 import DataV1, Widget
-from .decompress import decompress, decompress_node, is_compressed, Decoded
+try:
+    from .decompress import decompress, decompress_node, is_compressed, Decoded
+except Exception:  # pragma: no cover - lzma may be unavailable (e.g. Pyodide/WASM)
+    # Decompression is optional: the browser configurator never needs it, and
+    # Pyodide's Python ships without the `lzma` module. Keep the package importable.
+    decompress = decompress_node = is_compressed = Decoded = None  # type: ignore
 
 __all__ = [
     "ImageWTY", "FileEntry",

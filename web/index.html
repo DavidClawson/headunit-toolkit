@@ -168,7 +168,7 @@ async function boot(){
     refresh();
   } catch (e){
     setRuntime("failed", "err");
-    log("Runtime failed to load:\n" + e + "\n\nThis page must be served over http (e.g. `python3 -m http.server` from the repo root, then open /web/). Opening the file directly won't work.");
+    log("Runtime failed to load:\n" + (e && (e.stack || e.message) ? (e.stack || e.message) : e) + "\n\nIf served over file:// this won't work — it needs http (e.g. `python3 -m http.server` from the repo root, then open /web/).");
   }
 }
 
