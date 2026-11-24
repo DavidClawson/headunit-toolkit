@@ -114,6 +114,11 @@
   .me-current { display:flex; gap:.6rem; align-items:center; margin:.2rem 0 .8rem; }
   .me-current img { width:130px; border:1px solid var(--line); border-radius:6px;
     object-fit:cover; aspect-ratio:16/9; background:var(--code); }
+  details.card > summary.cfg-summary { cursor:pointer; font-weight:600; font-size:1.1rem;
+    list-style:none; }
+  details.card > summary.cfg-summary::-webkit-details-marker { display:none; }
+  details.card > summary.cfg-summary::before { content:"▸ "; color:var(--muted); }
+  details.card[open] > summary.cfg-summary::before { content:"▾ "; }
   .cfg-how { margin:.2rem 0 .9rem; font-size:.9rem; }
   .cfg-how summary { cursor:pointer; color:var(--accent); }
   .cfg-how ol { margin:.5rem 0 0; padding-left:1.2rem; color:var(--muted); line-height:1.6; }
@@ -175,9 +180,9 @@
   <p class="muted" style="font-size:.85rem">This page keeps <strong>anonymous, cookieless</strong> visit and build counts (via <a href="https://www.goatcounter.com" rel="noopener">GoatCounter</a>) so I can see how many people find it useful. No personal data, no tracking across sites — and your firmware still never leaves your browser.</p>
 </div>
 
-<div class="card" id="cfgCard">
-  <h2>Device settings <span class="muted" style="font-size:.62em;font-weight:400">· optional, no firmware flash</span></h2>
-  <p class="muted" style="margin:-.3rem 0 .7rem">Change safe settings — clock format, brightness, Bluetooth name, startup volume, radio region — by loading the <code>Config.ini</code> your unit exports. This never touches the firmware image, and the unit just reboots to apply.</p>
+<details class="card" id="cfgCard">
+  <summary class="cfg-summary">Advanced — Device settings <span class="muted" style="font-size:.72em;font-weight:400">· clock, brightness, Bluetooth name, region · no firmware flash</span></summary>
+  <p class="muted" style="margin:.7rem 0 .7rem">Change safe settings — clock format, brightness, Bluetooth name, startup volume, radio region — by loading the <code>Config.ini</code> your unit exports, then re-importing it. This never touches the firmware image, and the unit just reboots to apply.</p>
   <details class="cfg-how">
     <summary>How to get your <code>Config.ini</code> (one-time, on the unit)</summary>
     <ol>
@@ -194,7 +199,7 @@
   <div id="cfgControls" class="hidden"></div>
   <a id="cfgDl" class="hidden"></a>
   <div id="cfgMsg" class="muted" style="margin-top:.6rem"></div>
-</div>
+</details>
 
 <!-- edit modal -->
 <div class="modal hidden" id="modal">
