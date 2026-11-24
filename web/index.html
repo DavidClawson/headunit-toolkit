@@ -114,6 +114,21 @@
   .me-current { display:flex; gap:.6rem; align-items:center; margin:.2rem 0 .8rem; }
   .me-current img { width:130px; border:1px solid var(--line); border-radius:6px;
     object-fit:cover; aspect-ratio:16/9; background:var(--code); }
+  .cfg-how { margin:.2rem 0 .9rem; font-size:.9rem; }
+  .cfg-how summary { cursor:pointer; color:var(--accent); }
+  .cfg-how ol { margin:.5rem 0 0; padding-left:1.2rem; color:var(--muted); line-height:1.6; }
+  .cfg-grp { font-size:.95rem; margin:1.1rem 0 .4rem; padding-bottom:.25rem;
+    border-bottom:1px solid var(--line); color:var(--muted); font-weight:600;
+    text-transform:uppercase; letter-spacing:.04em; }
+  .cfg-row { display:flex; align-items:center; gap:.8rem; padding:.45rem 0; }
+  .cfg-label { flex:1 1 auto; }
+  .cfg-input, .cfg-row select, .cfg-row input[type=text], .cfg-row input[type=number] {
+    flex:0 0 auto; min-width:9rem; padding:.35rem .5rem; border:1px solid var(--line);
+    border-radius:6px; background:var(--bg); color:var(--ink); font:inherit; }
+  .cfg-range { display:flex; align-items:center; gap:.6rem; flex:0 0 auto; }
+  .cfg-range input[type=range] { width:11rem; }
+  .cfg-out { min-width:2.2rem; text-align:right; color:var(--muted);
+    font-variant-numeric:tabular-nums; }
 </style>
 <!-- Anonymous, cookieless usage counts (GoatCounter). No personal data; your firmware never leaves the page. -->
 <script data-goatcounter="https://headunit.goatcounter.com/count"
@@ -158,6 +173,27 @@
 
   <p class="muted">Safe resource edits only (boot splash &amp; wallpapers). Boot-chain and module work stay on the command line / bench unit. Keep your stock image — every edit here is reversible by reflashing it.</p>
   <p class="muted" style="font-size:.85rem">This page keeps <strong>anonymous, cookieless</strong> visit and build counts (via <a href="https://www.goatcounter.com" rel="noopener">GoatCounter</a>) so I can see how many people find it useful. No personal data, no tracking across sites — and your firmware still never leaves your browser.</p>
+</div>
+
+<div class="card" id="cfgCard">
+  <h2>Device settings <span class="muted" style="font-size:.62em;font-weight:400">· optional, no firmware flash</span></h2>
+  <p class="muted" style="margin:-.3rem 0 .7rem">Change safe settings — clock format, brightness, Bluetooth name, startup volume, radio region — by loading the <code>Config.ini</code> your unit exports. This never touches the firmware image, and the unit just reboots to apply.</p>
+  <details class="cfg-how">
+    <summary>How to get your <code>Config.ini</code> (one-time, on the unit)</summary>
+    <ol>
+      <li>On the unit: <b>Settings &rarr; Factory Set</b>, enter password <code>666999</code>.</li>
+      <li>Open <b>Configure Setting</b>, insert a USB stick, and tap <b>Export</b> at the bottom &mdash; it writes <code>Config.ini</code> to the stick's root.</li>
+      <li>Load that file below, change what you want, and <b>download</b> it.</li>
+      <li>Copy it back to the stick's root, and tap <b>Import</b> on that same screen. The unit reboots with your changes.</li>
+    </ol>
+  </details>
+  <div class="drop" id="cfgDrop">
+    <div>Drop your <code>Config.ini</code> here, or click to choose</div>
+    <input type="file" id="cfgFile" accept=".ini,text/plain" class="hidden">
+  </div>
+  <div id="cfgControls" class="hidden"></div>
+  <a id="cfgDl" class="hidden"></a>
+  <div id="cfgMsg" class="muted" style="margin-top:.6rem"></div>
 </div>
 
 <!-- edit modal -->
@@ -444,6 +480,123 @@ _log
     $("buildBtn").disabled = false;
   }
 });
+
+// ===== Device settings (Config.ini) editor — pure JS, no firmware/runtime =====
+// Only a vetted whitelist of SAFE keys is exposed. Panel-voltage / tuning /
+// UI-selection keys are deliberately omitted (they can brick or damage the unit).
+const CFG_SAFE = [
+  { group:"Display & clock", items:[
+    { sec:"SETUP", key:"b12Hour", label:"Clock format", type:"select", opts:[["1","12-hour"],["0","24-hour"]] },
+    { sec:"SETUP", key:"bDateShow", label:"Show date", type:"toggle" },
+    { sec:"SETUP", key:"bBeepOn", label:"Touch / key beep", type:"toggle" },
+    { sec:"SETUP", key:"bScreenSave", label:"Screen saver", type:"toggle" },
+    { sec:"SETUP", key:"bAnyKeyPowerUp", label:"Any key powers on", type:"toggle" },
+    { sec:"SETUP", key:"bright", label:"Brightness", type:"range", min:0, max:100 },
+    { sec:"SETUP", key:"contrast", label:"Contrast", type:"range", min:0, max:100 },
+    { sec:"BACKLIGHT", key:"backLightDay", label:"Daytime backlight", type:"range", min:0, max:100 },
+    { sec:"BACKLIGHT", key:"backLightNight", label:"Night backlight", type:"range", min:0, max:100 },
+  ]},
+  { group:"Startup", items:[
+    { sec:"STARTUP", key:"startUpDefVolume", label:"Startup volume", type:"range", min:0, max:40 },
+    { sec:"STARTUP", key:"startUpDelayTime", label:"Startup delay (ms)", type:"number", min:0, max:5000 },
+  ]},
+  { group:"Bluetooth", items:[
+    { sec:"BT", key:"btLocalName", label:"Bluetooth name", type:"text", maxlen:32 },
+  ]},
+  { group:"Radio region", items:[
+    { sec:"RADIO", key:"radioArea", label:"Radio region", type:"select",
+      opts:[["0","China"],["1","America 1"],["2","Japan"],["3","America 2"],["4","Russia"],["5","Middle East"],["6","Europe"],["7","Australia"],["8","East Europe"]] },
+  ]},
+];
+
+const cfg = { eol:"\n", trailNL:true, lines:[], loc:{} };  // loc: "SEC\u0000key"->{idx}
+
+function cfgParse(text){
+  cfg.eol = text.includes("\r\n") ? "\r\n" : "\n";
+  cfg.trailNL = /\r?\n$/.test(text);
+  const rows = text.split(/\r?\n/);
+  if (cfg.trailNL && rows.length && rows[rows.length-1] === "") rows.pop();
+  cfg.lines = rows; cfg.loc = {};
+  let sec = "";
+  for (let i = 0; i < rows.length; i++){
+    const m = rows[i].match(/^\s*\[([^\]]+)\]\s*$/);
+    if (m){ sec = m[1].trim().toUpperCase(); continue; }
+    const kv = rows[i].match(/^\s*([A-Za-z_][\w]*)\s*=(.*)$/);
+    if (kv) cfg.loc[sec + "\u0000" + kv[1].toLowerCase()] = { idx:i };
+  }
+  if (!Object.keys(cfg.loc).length) throw new Error("no [SECTION] key=value pairs");
+}
+function cfgGet(sec, key){
+  const e = cfg.loc[sec.toUpperCase() + "\u0000" + key.toLowerCase()];
+  if (!e) return null;
+  return cfg.lines[e.idx].slice(cfg.lines[e.idx].indexOf("=") + 1);
+}
+function cfgSet(sec, key, val){
+  const e = cfg.loc[sec.toUpperCase() + "\u0000" + key.toLowerCase()];
+  if (!e) return;
+  cfg.lines[e.idx] = key + "=" + val;   // keys are canonical in these files
+}
+function cfgText(){ return cfg.lines.join(cfg.eol) + (cfg.trailNL ? cfg.eol : ""); }
+
+function cfgRender(){
+  const host = $("cfgControls"); host.innerHTML = ""; let shown = 0;
+  for (const grp of CFG_SAFE){
+    const present = grp.items.filter(it => cfgGet(it.sec, it.key) !== null);
+    if (!present.length) continue;
+    const h = document.createElement("h3"); h.className = "cfg-grp"; h.textContent = grp.group; host.appendChild(h);
+    for (const it of present){
+      shown++;
+      const cur = cfgGet(it.sec, it.key).trim();
+      const row = document.createElement("label"); row.className = "cfg-row";
+      const name = document.createElement("span"); name.className = "cfg-label"; name.textContent = it.label; row.appendChild(name);
+      if (it.type === "select" || it.type === "toggle"){
+        const sel = document.createElement("select"); sel.className = "cfg-input";
+        const opts = it.type === "toggle" ? [["1","On"],["0","Off"]] : it.opts;
+        for (const [v,l] of opts){ const o = document.createElement("option"); o.value = v; o.textContent = l; sel.appendChild(o); }
+        sel.value = cur; if (sel.value !== cur) { const o = document.createElement("option"); o.value = cur; o.textContent = cur + " (current)"; sel.appendChild(o); sel.value = cur; }
+        sel.onchange = () => cfgSet(it.sec, it.key, sel.value);
+        row.appendChild(sel);
+      } else if (it.type === "range"){
+        const wrap = document.createElement("span"); wrap.className = "cfg-range";
+        const inp = document.createElement("input"); inp.type = "range"; inp.min = it.min; inp.max = it.max; inp.value = cur;
+        const out = document.createElement("span"); out.className = "cfg-out"; out.textContent = cur;
+        inp.oninput = () => { out.textContent = inp.value; cfgSet(it.sec, it.key, inp.value); };
+        wrap.appendChild(inp); wrap.appendChild(out); row.appendChild(wrap);
+      } else if (it.type === "number"){
+        const inp = document.createElement("input"); inp.type = "number"; inp.className = "cfg-input";
+        inp.min = it.min; inp.max = it.max; inp.value = cur;
+        inp.onchange = () => cfgSet(it.sec, it.key, inp.value);
+        row.appendChild(inp);
+      } else { // text
+        const inp = document.createElement("input"); inp.type = "text"; inp.className = "cfg-input"; inp.value = cur;
+        if (it.maxlen) inp.maxLength = it.maxlen;
+        inp.oninput = () => cfgSet(it.sec, it.key, inp.value);
+        row.appendChild(inp);
+      }
+      host.appendChild(row);
+    }
+  }
+  const btn = document.createElement("button"); btn.className = "primary"; btn.textContent = "⬇ Download Config.ini";
+  btn.style.marginTop = "1rem"; btn.onclick = cfgDownload; host.appendChild(btn);
+  host.classList.remove("hidden");
+  $("cfgMsg").textContent = shown + " safe settings loaded — change any, download, then Import on the unit (it reboots to apply). Other keys in your file are preserved untouched.";
+}
+function cfgDownload(){
+  const blob = new Blob([cfgText()], { type:"text/plain" });
+  const a = $("cfgDl"); a.href = URL.createObjectURL(blob); a.download = "Config.ini"; a.click();
+  try { window.goatcounter && window.goatcounter.count({ path:"config-build", title:"config edited", event:true }); } catch(_){}
+}
+function cfgLoad(file){
+  const r = new FileReader();
+  r.onload = () => { try { cfgParse(String(r.result)); cfgRender(); }
+    catch(e){ $("cfgControls").classList.add("hidden"); $("cfgMsg").textContent = "Couldn't read that — load the Config.ini your unit exported (Factory Set → Configure Setting → Export)."; } };
+  r.readAsText(file);
+}
+$("cfgDrop").addEventListener("click", () => $("cfgFile").click());
+$("cfgFile").addEventListener("change", e => { if (e.target.files[0]) cfgLoad(e.target.files[0]); });
+["dragover","dragleave","drop"].forEach(ev => $("cfgDrop").addEventListener(ev, e => {
+  e.preventDefault(); if (ev === "drop" && e.dataTransfer.files[0]) cfgLoad(e.dataTransfer.files[0]);
+}));
 
 boot();
 </script>
