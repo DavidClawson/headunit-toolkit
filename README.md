@@ -88,6 +88,7 @@ For a few ready-made example wallpapers to try, run
 | [`docs/reference/control-inventory.md`](docs/reference/control-inventory.md) | UI control cross-reference (placed vs referenced; dormant features) |
 | [`docs/re-notes.md`](docs/re-notes.md) | deeper RE working notes (link base, Ghidra recipe, module ABI) |
 | [`docs/first-flash-bench.md`](docs/first-flash-bench.md) | first-flash bench checklist (USB update, verify, recover) |
+| [`docs/devlog.md`](docs/devlog.md) | dated bench-test log — what was validated on real hardware, and the lessons |
 | [`docs/feature-ideas.md`](docs/feature-ideas.md) | demand-backed roadmap (from user-complaint research) |
 | [`docs/legal-and-scope.md`](docs/legal-and-scope.md) | what you can and can't ship |
 
