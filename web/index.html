@@ -185,7 +185,7 @@
 <script type="module">
 const PYODIDE = "https://cdn.jsdelivr.net/pyodide/v0.26.4/full/";
 const MODULES = ["__init__","imagewty","minfs","datav1","datav1_edit","decompress","logo","wallpaper","strings"];
-const ASSET_V = "7";  // bump to bust the browser cache of the fetched .py modules after an update
+const ASSET_V = "8";  // bump to bust the browser cache of the fetched .py modules after an update
 
 const $ = (id) => document.getElementById(id);
 const runtimePill = $("runtime"), logEl = $("log");
@@ -201,6 +201,9 @@ const SLOTS = [
   { key:"w1", label:"Wallpaper 2", w:1024, h:600, idx:1, where:"home screen" },
   { key:"w2", label:"Wallpaper 3", w:1024, h:600, idx:2, where:"home screen" },
   { key:"w3", label:"Wallpaper 4", w:1024, h:600, idx:3, where:"home screen" },
+  { key:"l2", label:"Logo choice 2", w:1020, h:597, logo:2, where:"Logos picker" },
+  { key:"l3", label:"Logo choice 3", w:1021, h:597, logo:3, where:"Logos picker" },
+  { key:"l4", label:"Logo choice 4", w:1021, h:597, logo:4, where:"Logos picker" },
 ];
 const current = {};  // key -> data URL already on the firmware
 const staged  = {};  // key -> { bytes, url } for slots the user has changed
@@ -296,6 +299,7 @@ function showCurrent(buf){
     const o = r.toJs({dict_converter: Object.fromEntries}); r.destroy && r.destroy();
     current.splash = o.splash || null; setSlotImg("splash", current.splash);
     (o.wallpapers || []).forEach((u,i) => { current["w"+i] = u || null; setSlotImg("w"+i, u || null); });
+    (o.logos || []).forEach((u,i) => { const k = "l"+(i+2); current[k] = u || null; setSlotImg(k, u || null); });
     for (const s of SLOTS) slotEl(s.key).classList.remove("modified");
     $("editCard").classList.remove("hidden");
   } catch(e){ /* previews optional — don't block the tool */ }
@@ -409,12 +413,14 @@ $("buildBtn").addEventListener("click", async () => {
     pyodide.globals.set("IMAGE", imageBytes);
     pyodide.globals.set("SPLASH", staged.splash ? staged.splash.bytes : null);
     pyodide.globals.set("WALLS", [0,1,2,3].map(i => staged["w"+i] ? staged["w"+i].bytes : null));
+    pyodide.globals.set("LOGOS", [2,3,4].map(n => staged["l"+n] ? staged["l"+n].bytes : null));
     const logProxy = pyodide.runPython(`
 import configurator
 _img = bytes(IMAGE.to_py())
 _sp = bytes(SPLASH.to_py()) if SPLASH is not None else None
 _wl = [ (bytes(w) if w is not None else None) for w in WALLS.to_py() ]
-_out, _log = configurator.apply_edits(_img, splash=_sp, wallpapers=_wl)
+_lg = [ (bytes(g) if g is not None else None) for g in LOGOS.to_py() ]
+_out, _log = configurator.apply_edits(_img, splash=_sp, wallpapers=_wl, logos=_lg)
 with open("/out.img", "wb") as _f: _f.write(_out)
 _log
 `);

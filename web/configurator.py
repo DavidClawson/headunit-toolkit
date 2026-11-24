@@ -17,7 +17,7 @@ import os
 import tempfile
 
 from headunit.imagewty import ImageWTY
-from headunit.logo import swap_logo
+from headunit.logo import set_logo_choice, swap_logo
 from headunit.minfs import MinFS
 from headunit.strings import fix_strings
 from headunit.wallpaper import SLOTS, set_all_wallpapers, set_wallpaper
@@ -43,7 +43,9 @@ def extract_previews(image_bytes: bytes) -> dict:
 
     splash = rd("/Logo/logo1.jpg") or rd("/logo1.jpg")
     walls = [rd(f"/WallPaper/{i}.jpg") for i in range(SLOTS)]
-    return {"splash": splash, "wallpapers": walls}
+    # Boot-logo picker choices 2-4 (choice 1 == the splash above).
+    logos = [rd(f"/Logo/logo{n}.jpg") or rd(f"/logo{n}.jpg") for n in (2, 3, 4)]
+    return {"splash": splash, "wallpapers": walls, "logos": logos}
 
 
 def preview_data_urls(image_bytes: bytes) -> dict:
@@ -56,7 +58,8 @@ def preview_data_urls(image_bytes: bytes) -> dict:
 
     p = extract_previews(image_bytes)
     return {"splash": url(p["splash"]),
-            "wallpapers": [url(w) for w in p["wallpapers"]]}
+            "wallpapers": [url(w) for w in p["wallpapers"]],
+            "logos": [url(g) for g in p["logos"]]}
 
 
 def _tmp(data: bytes) -> str:
@@ -67,12 +70,15 @@ def _tmp(data: bytes) -> str:
 
 
 def apply_edits(image_bytes: bytes, *, splash: bytes | None = None,
-                wallpapers: list | None = None) -> tuple[bytes, list[str]]:
+                wallpapers: list | None = None,
+                logos: list | None = None) -> tuple[bytes, list[str]]:
     """Apply per-slot image edits and return ``(patched_bytes, log_lines)``.
 
-    ``splash`` replaces the boot logo. ``wallpapers`` is a list of up to 4
-    entries (``bytes`` to replace that slot, ``None`` to leave it); index i maps
-    to ``/WallPaper/i.jpg``. Each edit rewrites the MINFS partition with a
+    ``splash`` replaces the active boot logo (and ``stalogo1``). ``wallpapers``
+    is a list of up to 4 entries (``bytes`` to replace that slot, ``None`` to
+    leave it); index i maps to ``/WallPaper/i.jpg``. ``logos`` is a list of up
+    to 3 entries for the boot-logo picker choices 2-4 (index 0 -> choice 2);
+    choice 1 is the splash. Each edit rewrites the MINFS partition with a
     corrected checksum, so they compose. Nothing is uploaded.
     """
     log: list[str] = []
@@ -88,6 +94,19 @@ def apply_edits(image_bytes: bytes, *, splash: bytes | None = None,
         try:
             set_wallpaper(img, i, path)
             log.append(f"Wallpaper {i + 1} — replaced.")
+        finally:
+            os.unlink(path)
+
+    for i, lg in enumerate(logos or []):
+        if lg is None:
+            continue
+        choice = i + 2  # list index 0 -> picker choice 2
+        if choice not in (2, 3, 4):
+            continue
+        path = _tmp(lg)
+        try:
+            set_logo_choice(img, choice, path)
+            log.append(f"Logo choice {choice} — replaced.")
         finally:
             os.unlink(path)
 

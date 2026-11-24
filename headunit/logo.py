@@ -17,10 +17,48 @@ import struct
 from PIL import Image, ImageOps
 
 from .imagewty import ImageWTY
-from .minfs import MAGIC as MINFS_MAGIC, checksum
+from .minfs import MAGIC as MINFS_MAGIC, MinFS, checksum, write_partition
 
 W, H = 1280, 720
 LOGO_NAMES = (b"logo1.jpg", b"stalogo1.jpg")
+
+PART = "data_udisk.fex"
+# The "Logos" launcher tile lets the user pick between four boot logos, each
+# stored twice (a /Logo/ copy and a root copy). Slot 1 is also the active boot
+# splash (see swap_logo, which additionally rewrites stalogo1.jpg); slots 2-4
+# are the alternate choices — ideal for car-make/model badges.
+LOGO_CHOICES = (1, 2, 3, 4)
+
+
+def _choice_paths(index: int) -> list[str]:
+    if index not in LOGO_CHOICES:
+        raise ValueError(f"logo choice must be 1..4, got {index}")
+    return [f"/Logo/logo{index}.jpg", f"/logo{index}.jpg"]
+
+
+def set_logo_choice(img: ImageWTY, index: int, src_path: str,
+                    partition: str = PART) -> bytes:
+    """Replace boot-logo choice ``index`` (1..4) in ``img`` (modified in place).
+
+    Updates **both** stored copies (``/Logo/logo<i>.jpg`` and ``/logo<i>.jpg``),
+    re-encoding ``src_path`` to that slot's own stock pixel dimensions (slot 1 is
+    1280x720; slots 2-4 are ~1020x597 on this panel). Commits via
+    :meth:`MinFS.repack` + :func:`write_partition` (checksum fixed). Returns the
+    encoded JPEG bytes (useful as a preview).
+
+    Note: for the *active boot splash* use :func:`swap_logo` instead — it also
+    rewrites ``stalogo1.jpg``. This only touches the picker thumbnails.
+    """
+    from .wallpaper import encode_to_size  # same baseline-JPEG, size-matched encoder
+
+    paths = _choice_paths(index)
+    fs = MinFS(img.read(partition))
+    ref = Image.open(io.BytesIO(bytes(fs.read(fs.find(paths[0])))))
+    jpg = encode_to_size(src_path, ref.size)
+
+    new_blob = fs.repack({p: jpg for p in paths})
+    write_partition(img, new_blob, partition, "V" + partition)
+    return jpg
 
 
 def _find_jpeg_entry(part: bytes, name: bytes):
