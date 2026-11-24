@@ -57,6 +57,9 @@ publishing anything built with it.
 - **A browser configurator** (`web/`) for the safe edits (splash + live crop
   preview, wallpaper, typo fixes), running the toolkit client-side via Pyodide —
   your firmware never leaves the page. See [`web/README.md`](web/README.md).
+  The hosted page keeps **anonymous, cookieless** visit/build counts (GoatCounter,
+  no personal data) so we can gauge whether it's useful; the firmware itself is
+  still never uploaded.
 
 ## Install
 

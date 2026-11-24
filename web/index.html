@@ -115,6 +115,9 @@
   .me-current img { width:130px; border:1px solid var(--line); border-radius:6px;
     object-fit:cover; aspect-ratio:16/9; background:var(--code); }
 </style>
+<!-- Anonymous, cookieless usage counts (GoatCounter). No personal data; your firmware never leaves the page. -->
+<script data-goatcounter="https://headunit.goatcounter.com/count"
+        async src="//gc.zgo.at/count.js"></script>
 </head>
 <body>
 <div class="wrap">
@@ -154,6 +157,7 @@
   </div>
 
   <p class="muted">Safe resource edits only (boot splash &amp; wallpapers). Boot-chain and module work stay on the command line / bench unit. Keep your stock image — every edit here is reversible by reflashing it.</p>
+  <p class="muted" style="font-size:.85rem">This page keeps <strong>anonymous, cookieless</strong> visit and build counts (via <a href="https://www.goatcounter.com" rel="noopener">GoatCounter</a>) so I can see how many people find it useful. No personal data, no tracking across sites — and your firmware still never leaves your browser.</p>
 </div>
 
 <!-- edit modal -->
@@ -426,6 +430,8 @@ _log
     a.style.display = "inline-block";
     a.style.marginLeft = ".6rem";
     log(lines.join("\n") + `\n\n✓ Built ${(outBytes.length/1048576).toFixed(1)} MB. Download ready.`);
+    // Anonymous count of a completed build (no data about the image). Looked vs. actually built.
+    try { window.goatcounter && window.goatcounter.count({ path: "build", title: "image built", event: true }); } catch (_){}
   } catch (e){
     log("Build failed:\n" + e);
   } finally {
