@@ -18,8 +18,45 @@ import tempfile
 
 from headunit.imagewty import ImageWTY
 from headunit.logo import swap_logo
+from headunit.minfs import MinFS
 from headunit.strings import fix_strings
 from headunit.wallpaper import SLOTS, set_all_wallpapers, set_wallpaper
+
+
+def extract_previews(image_bytes: bytes) -> dict:
+    """Read the *current* boot splash and wallpapers out of a stock image so the
+    UI can show what's already on the device. Returns raw JPEG bytes:
+
+        {"splash": bytes|None, "wallpapers": [bytes|None, ...]}  # 4 slots
+
+    Values are ``None`` when a slot isn't present. Nothing is modified.
+    """
+    img = ImageWTY(bytes(image_bytes))
+    fs = MinFS(img.read(img.get("data_udisk.fex")))
+
+    def rd(path: str):
+        try:
+            data = bytes(fs.read(path)).rstrip(b"\x00")  # slots are null-padded
+            return data if data[:2] == b"\xff\xd8" else None  # must be a JPEG
+        except Exception:
+            return None
+
+    splash = rd("/Logo/logo1.jpg") or rd("/logo1.jpg")
+    walls = [rd(f"/WallPaper/{i}.jpg") for i in range(SLOTS)]
+    return {"splash": splash, "wallpapers": walls}
+
+
+def preview_data_urls(image_bytes: bytes) -> dict:
+    """Same as :func:`extract_previews` but as ``data:`` URLs (or ``None``) so
+    the browser can drop them straight into ``<img src>``."""
+    import base64
+
+    def url(b):
+        return "data:image/jpeg;base64," + base64.b64encode(b).decode() if b else None
+
+    p = extract_previews(image_bytes)
+    return {"splash": url(p["splash"]),
+            "wallpapers": [url(w) for w in p["wallpapers"]]}
 
 
 def _tmp(data: bytes) -> str:

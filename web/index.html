@@ -82,6 +82,17 @@
   a { color: var(--accent); }
   .hidden { display: none; }
   code { background: var(--code); padding: .05rem .35rem; border-radius: 5px; }
+  .thumbs { display:flex; gap:.7rem; flex-wrap:wrap; }
+  .thumbs figure { margin:0; width:150px; }
+  .thumbs img { width:100%; border:1px solid var(--line); border-radius:8px;
+    display:block; background:var(--code); aspect-ratio:16/9; object-fit:cover; }
+  .thumbs figcaption { font-size:.78rem; color:var(--muted); text-align:center; margin-top:.25rem; }
+  .editor { margin:.3rem 0 .8rem; }
+  .editor canvas { width:100%; max-width:420px; display:block; border:1px solid var(--line);
+    border-radius:8px; background:#000; cursor:grab; touch-action:none; }
+  .editor canvas:active { cursor:grabbing; }
+  .editor input[type=range] { flex:1; max-width:260px; }
+  .edit-block { margin:.3rem 0; }
 </style>
 </head>
 <body>
@@ -103,19 +114,43 @@
     <div class="muted" id="imgInfo" style="margin-top:.6rem">Use the original image the vendor sent you — keep a copy as your restore point.</div>
   </div>
 
+  <div class="card hidden" id="currentCard">
+    <h2><span class="step">★</span> Currently on this image</h2>
+    <p class="muted" style="margin:-.3rem 0 .7rem">What's on the firmware you loaded — your edits below replace these.</p>
+    <div class="thumbs">
+      <figure><img id="curSplash" alt="current boot splash"><figcaption>Boot splash</figcaption></figure>
+      <figure><img id="curWall0" alt="wallpaper 1"><figcaption>Wallpaper 1</figcaption></figure>
+      <figure><img id="curWall1" alt="wallpaper 2"><figcaption>Wallpaper 2</figcaption></figure>
+      <figure><img id="curWall2" alt="wallpaper 3"><figcaption>Wallpaper 3</figcaption></figure>
+      <figure><img id="curWall3" alt="wallpaper 4"><figcaption>Wallpaper 4</figcaption></figure>
+    </div>
+  </div>
+
   <div class="card" id="optsCard" style="opacity:.55; pointer-events:none;">
     <h2><span class="step">2</span> Choose edits</h2>
     <label class="row"><input type="checkbox" id="optTypos"> Fix menu typos (<code>botton</code>→button, <code>RDS swich</code>→switch)</label>
-    <label class="row">Boot splash: <input type="file" id="optSplash" accept="image/*"> <span class="muted">(any image; cropped to 1280×720)</span></label>
-    <canvas id="splashPrev" class="hidden" width="1280" height="720"
-            style="width:100%;max-width:360px;aspect-ratio:16/9;border:1px solid var(--line);border-radius:8px;margin:.2rem 0 .7rem;"></canvas>
-    <label class="row">Wallpaper: <input type="file" id="optWall" accept="image/*">
-      <select id="optWallSlot">
-        <option value="all">all four slots</option>
-        <option value="0">slot 0</option><option value="1">slot 1</option>
-        <option value="2">slot 2</option><option value="3">slot 3</option>
-      </select>
-    </label>
+
+    <div class="edit-block">
+      <label class="row">Boot splash: <input type="file" id="optSplash" accept="image/*"></label>
+      <div id="splashEditor" class="editor hidden">
+        <canvas id="splashCanvas" width="1280" height="720"></canvas>
+        <label class="row muted">Drag to position · <input type="range" id="splashZoom" min="1" max="3" step="0.01" value="1"> zoom — this frame is exactly the 1280×720 boot screen.</label>
+      </div>
+    </div>
+
+    <div class="edit-block">
+      <label class="row">Wallpaper: <input type="file" id="optWall" accept="image/*">
+        <select id="optWallSlot">
+          <option value="all">all four slots</option>
+          <option value="0">slot 1</option><option value="1">slot 2</option>
+          <option value="2">slot 3</option><option value="3">slot 4</option>
+        </select>
+      </label>
+      <div id="wallEditor" class="editor hidden">
+        <canvas id="wallCanvas" width="1024" height="600"></canvas>
+        <label class="row muted">Drag to position · <input type="range" id="wallZoom" min="1" max="3" step="0.01" value="1"> zoom — this frame is exactly the 1024×600 home screen.</label>
+      </div>
+    </div>
   </div>
 
   <div class="card">
@@ -136,7 +171,7 @@
 <script type="module">
 const PYODIDE = "https://cdn.jsdelivr.net/pyodide/v0.26.4/full/";
 const MODULES = ["__init__","imagewty","minfs","datav1","datav1_edit","decompress","logo","wallpaper","strings"];
-const ASSET_V = "5";  // bump to bust the browser cache of the fetched .py modules after an update
+const ASSET_V = "6";  // bump to bust the browser cache of the fetched .py modules after an update
 
 const $ = (id) => document.getElementById(id);
 const runtimePill = $("runtime"), logEl = $("log");
@@ -202,6 +237,7 @@ async function loadImage(file){
     $("imgInfo").textContent = `Parsed OK — ${n} partitions, ${(buf.length/1048576).toFixed(1)} MB.`;
     log("Firmware loaded. Choose your edits, then Build.");
     refresh();
+    showCurrent(buf);
   } catch (e){
     imageBytes = null;
     $("imgInfo").textContent = "That doesn't look like a valid LTTF133 image: " + e;
@@ -209,26 +245,62 @@ async function loadImage(file){
   }
 }
 
-// --- live splash preview: exact 1280x720 center-crop (matches ImageOps.fit) ---
-$("optSplash").addEventListener("change", e => {
-  const f = e.target.files[0], c = $("splashPrev");
-  if (!f){ c.classList.add("hidden"); return; }
-  const im = new Image();
-  im.onload = () => {
-    const W = 1280, H = 720, ctx = c.getContext("2d");
-    const s = Math.max(W/im.width, H/im.height);       // "cover" scale
-    const dw = im.width*s, dh = im.height*s;
-    ctx.clearRect(0,0,W,H);
-    ctx.drawImage(im, (W-dw)/2, (H-dh)/2, dw, dh);      // center-crop
-    c.classList.remove("hidden");
-    URL.revokeObjectURL(im.src);
-  };
-  im.src = URL.createObjectURL(f);
-});
+// --- interactive image editor: drag to position + slider to zoom, WYSIWYG ---
+// The canvas is the exact slot resolution, so what you see is what gets written.
+class ImageEditor {
+  constructor(canvasId, zoomId, wrapId){
+    this.c = $(canvasId); this.zoomEl = $(zoomId); this.wrap = $(wrapId);
+    this.outW = this.c.width; this.outH = this.c.height;
+    this.img = null; this.scale = 1; this.ox = 0; this.oy = 0; this.base = 1;
+    this.zoomEl.addEventListener("input", () => { this.scale = parseFloat(this.zoomEl.value); this.draw(); });
+    let drag = null;
+    const k = () => this.outW / (this.c.getBoundingClientRect().width || this.outW);
+    this.c.addEventListener("pointerdown", ev => { if(!this.img) return; drag = {x:ev.clientX, y:ev.clientY, ox:this.ox, oy:this.oy, k:k()}; this.c.setPointerCapture(ev.pointerId); });
+    this.c.addEventListener("pointermove", ev => { if(!drag) return; this.ox = drag.ox + (ev.clientX-drag.x)*drag.k; this.oy = drag.oy + (ev.clientY-drag.y)*drag.k; this.draw(); });
+    const end = () => { drag = null; };
+    this.c.addEventListener("pointerup", end);
+    this.c.addEventListener("pointercancel", end);
+  }
+  load(file){
+    const im = new Image();
+    im.onload = () => {
+      this.img = im;
+      this.base = Math.max(this.outW/im.width, this.outH/im.height); // "cover"
+      this.scale = 1; this.ox = 0; this.oy = 0; this.zoomEl.value = "1";
+      this.wrap.classList.remove("hidden");
+      this.draw();
+    };
+    im.src = URL.createObjectURL(file);
+  }
+  clear(){ this.img = null; this.wrap.classList.add("hidden"); }
+  hasImage(){ return !!this.img; }
+  draw(){
+    const ctx = this.c.getContext("2d");
+    ctx.fillStyle = "#000"; ctx.fillRect(0,0,this.outW,this.outH);
+    if(!this.img) return;
+    const s = this.base * this.scale, dw = this.img.width*s, dh = this.img.height*s;
+    ctx.drawImage(this.img, (this.outW-dw)/2 + this.ox, (this.outH-dh)/2 + this.oy, dw, dh);
+  }
+  bytes(){ // Promise<Uint8Array>, JPEG at full slot resolution
+    return new Promise(res => this.c.toBlob(b => b.arrayBuffer().then(a => res(new Uint8Array(a))), "image/jpeg", 0.95));
+  }
+}
+const splashEd = new ImageEditor("splashCanvas","splashZoom","splashEditor");
+const wallEd   = new ImageEditor("wallCanvas","wallZoom","wallEditor");
+$("optSplash").addEventListener("change", e => { const f = e.target.files[0]; f ? splashEd.load(f) : splashEd.clear(); });
+$("optWall").addEventListener("change", e => { const f = e.target.files[0]; f ? wallEd.load(f) : wallEd.clear(); });
 
-async function readOpt(inputId){
-  const f = $(inputId).files[0];
-  return f ? new Uint8Array(await f.arrayBuffer()) : null;
+// --- show what's currently on the loaded firmware ---
+function showCurrent(buf){
+  try {
+    pyodide.globals.set("PV", buf);
+    const r = pyodide.runPython(`import configurator\nconfigurator.preview_data_urls(bytes(PV.to_py()))`);
+    const o = r.toJs({dict_converter: Object.fromEntries}); r.destroy && r.destroy();
+    const set = (id, url) => { const el = $(id); if(url){ el.src = url; el.style.display = "block"; } else { el.style.display = "none"; } };
+    set("curSplash", o.splash);
+    (o.wallpapers || []).forEach((u,i) => set("curWall"+i, u));
+    $("currentCard").classList.remove("hidden");
+  } catch(e){ /* previews are optional — don't block the tool */ }
 }
 
 $("buildBtn").addEventListener("click", async () => {
@@ -237,8 +309,8 @@ $("buildBtn").addEventListener("click", async () => {
   log("Building… (this runs entirely in your browser)");
   try {
     pyodide.globals.set("IMAGE", imageBytes);
-    pyodide.globals.set("SPLASH", await readOpt("optSplash"));
-    pyodide.globals.set("WP", await readOpt("optWall"));
+    pyodide.globals.set("SPLASH", splashEd.hasImage() ? await splashEd.bytes() : null);
+    pyodide.globals.set("WP", wallEd.hasImage() ? await wallEd.bytes() : null);
     pyodide.globals.set("FIX", $("optTypos").checked);
     pyodide.globals.set("SLOT", $("optWallSlot").value);
     const logProxy = pyodide.runPython(`
