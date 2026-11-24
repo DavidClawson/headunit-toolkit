@@ -125,13 +125,15 @@
   .cfg-grp { font-size:.95rem; margin:1.1rem 0 .4rem; padding-bottom:.25rem;
     border-bottom:1px solid var(--line); color:var(--muted); font-weight:600;
     text-transform:uppercase; letter-spacing:.04em; }
-  .cfg-row { display:flex; align-items:center; gap:.8rem; padding:.45rem 0; }
-  .cfg-label { flex:1 1 auto; }
+  .cfg-row { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between;
+    gap:.3rem 1rem; padding:.5rem 0; max-width:30rem; }
+  .cfg-label { flex:0 1 auto; }
   .cfg-input, .cfg-row select, .cfg-row input[type=text], .cfg-row input[type=number] {
-    flex:0 0 auto; min-width:9rem; padding:.35rem .5rem; border:1px solid var(--line);
+    flex:0 0 auto; min-width:8rem; max-width:13rem; padding:.35rem .5rem; border:1px solid var(--line);
     border-radius:6px; background:var(--bg); color:var(--ink); font:inherit; }
   .cfg-range { display:flex; align-items:center; gap:.6rem; flex:0 0 auto; }
-  .cfg-range input[type=range] { width:11rem; }
+  .cfg-range input[type=range] { width:9rem; }
+  .cfg-grp { max-width:30rem; }
   .cfg-out { min-width:2.2rem; text-align:right; color:var(--muted);
     font-variant-numeric:tabular-nums; }
 </style>
