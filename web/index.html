@@ -136,6 +136,7 @@
 <script type="module">
 const PYODIDE = "https://cdn.jsdelivr.net/pyodide/v0.26.4/full/";
 const MODULES = ["__init__","imagewty","minfs","datav1","datav1_edit","decompress","logo","wallpaper","strings"];
+const ASSET_V = "5";  // bump to bust the browser cache of the fetched .py modules after an update
 
 const $ = (id) => document.getElementById(id);
 const runtimePill = $("runtime"), logEl = $("log");
@@ -154,11 +155,11 @@ async function boot(){
     setRuntime("loading toolkit…");
     pyodide.FS.mkdirTree("headunit");
     for (const m of MODULES){
-      const r = await fetch(`../headunit/${m}.py`);
+      const r = await fetch(`../headunit/${m}.py?v=${ASSET_V}`);
       if (!r.ok) throw new Error(`could not fetch headunit/${m}.py (serve the repo root over http)`);
       pyodide.FS.writeFile(`headunit/${m}.py`, await r.text());
     }
-    const conf = await fetch("./configurator.py");
+    const conf = await fetch(`./configurator.py?v=${ASSET_V}`);
     if (!conf.ok) throw new Error("could not fetch configurator.py");
     pyodide.FS.writeFile("configurator.py", await conf.text());
     pyodide.runPython("import sys; sys.path.insert(0,'')\nimport configurator");
@@ -168,7 +169,8 @@ async function boot(){
     refresh();
   } catch (e){
     setRuntime("failed", "err");
-    log("Runtime failed to load:\n" + (e && (e.stack || e.message) ? (e.stack || e.message) : e) + "\n\nIf served over file:// this won't work — it needs http (e.g. `python3 -m http.server` from the repo root, then open /web/).");
+    const em = (e && (e.stack || e.message || (e.toString && e.toString()))) || String(e);
+    log("Runtime failed to load:\n" + em + "\n\nIf served over file:// this won't work — it needs http (e.g. `python3 -m http.server` from the repo root, then open /web/).");
   }
 }
 
