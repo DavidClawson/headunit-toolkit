@@ -5,6 +5,12 @@ F133** (RISC-V, "D1s") Android/Apple-projection car stereos that run
 Allwinner's **Melis** RTOS. Firmware ships as a single `LTTF133.img`
 (IMAGEWTY container) flashed from a FAT32 USB stick.
 
+**Verified on:** a [SJoyBring 7" QLED double-DIN](https://www.amazon.com/dp/B0CT5P32L7)
+(reports as model **JOY-W022**, firmware `LTTF133.img`). These units are sold
+under many brand names on the same Allwinner F133 platform — the toolkit targets
+the *platform*, so other brands shipping the same `LTTF133` firmware are likely
+compatible, but this is the specific unit we've tested on real hardware.
+
 This repo ships **code and knowledge, not firmware**. Everything here operates
 on an image *you* supply (the one the vendor sent you). It never contains or
 redistributes vendor firmware or the proprietary CarPlay / Android Auto
