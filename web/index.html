@@ -146,22 +146,32 @@ function log(msg){ logEl.textContent = msg; }
 function setRuntime(text, cls){ runtimePill.textContent = text; runtimePill.className = "pill" + (cls ? " "+cls : ""); }
 
 async function boot(){
+  let step = "start";
   try {
     setRuntime("loading runtime…");
+    step = "import-pyodide";
     const { loadPyodide } = await import(PYODIDE + "pyodide.mjs");
+    step = "loadPyodide";
     pyodide = await loadPyodide({ indexURL: PYODIDE });
     setRuntime("loading imaging…");
+    step = "loadPillow";
     await pyodide.loadPackage("pillow");
     setRuntime("loading toolkit…");
+    step = "mkdir";
     pyodide.FS.mkdirTree("headunit");
     for (const m of MODULES){
+      step = "fetch:" + m;
       const r = await fetch(`../headunit/${m}.py?v=${ASSET_V}`);
       if (!r.ok) throw new Error(`could not fetch headunit/${m}.py (serve the repo root over http)`);
+      step = "write:" + m;
       pyodide.FS.writeFile(`headunit/${m}.py`, await r.text());
     }
+    step = "fetch:configurator";
     const conf = await fetch(`./configurator.py?v=${ASSET_V}`);
     if (!conf.ok) throw new Error("could not fetch configurator.py");
+    step = "write:configurator";
     pyodide.FS.writeFile("configurator.py", await conf.text());
+    step = "import-configurator";
     pyodide.runPython("import sys; sys.path.insert(0,'')\nimport configurator");
     ready = true;
     setRuntime("ready", "ok");
@@ -170,7 +180,7 @@ async function boot(){
   } catch (e){
     setRuntime("failed", "err");
     const em = (e && (e.stack || e.message || (e.toString && e.toString()))) || String(e);
-    try { document.title = "BOOTERR2| ctor=" + ((e&&e.constructor&&e.constructor.name)||typeof e) + " name=" + ((e&&e.name)||"-") + " msg=" + ((e&&e.message)?String(e.message).replace(/\s+/g," ").slice(0,110):"NONE") + " keys=" + Object.keys(e||{}).join(",").slice(0,60); } catch(_){}
+    try { document.title = "BOOTERR3| step=" + step + " name=" + ((e&&e.name)||"-") + " errno=" + ((e&&e.errno)!=null?e.errno:"-") + " msg=" + ((e&&e.message)?String(e.message).replace(/\s+/g," ").slice(0,90):"NONE"); } catch(_){}
     log("Runtime failed to load:\n" + em + "\n\nIf served over file:// this won't work — it needs http (e.g. `python3 -m http.server` from the repo root, then open /web/).");
   }
 }
