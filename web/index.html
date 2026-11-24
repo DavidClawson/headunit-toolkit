@@ -170,7 +170,7 @@ async function boot(){
   } catch (e){
     setRuntime("failed", "err");
     const em = (e && (e.stack || e.message || (e.toString && e.toString()))) || String(e);
-    try { document.title = "BOOTERR: " + String(em).replace(/\s+/g," ").slice(0,160); } catch(_){}
+    try { document.title = "BOOTERR2| ctor=" + ((e&&e.constructor&&e.constructor.name)||typeof e) + " name=" + ((e&&e.name)||"-") + " msg=" + ((e&&e.message)?String(e.message).replace(/\s+/g," ").slice(0,110):"NONE") + " keys=" + Object.keys(e||{}).join(",").slice(0,60); } catch(_){}
     log("Runtime failed to load:\n" + em + "\n\nIf served over file:// this won't work — it needs http (e.g. `python3 -m http.server` from the repo root, then open /web/).");
   }
 }
