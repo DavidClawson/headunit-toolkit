@@ -163,7 +163,7 @@
     <h3 id="meTitle">Edit</h3>
     <div class="me-current" id="meCurrentWrap"><span class="muted">Currently on the device:</span><img id="meCurrent" alt="current slot image"></div>
     <div class="drop" id="meDrop">
-      <div>Drop a new image here, or click to choose</div>
+      <div>Drop a new image to replace it — or just re-position &amp; zoom the current one below.</div>
       <input type="file" id="meFile" accept="image/*" class="hidden">
     </div>
     <div id="meEditWrap" class="editor hidden" style="margin-top:.7rem">
@@ -314,6 +314,18 @@ const me = {
     };
     im.src = URL.createObjectURL(file);
   },
+  loadURL(url){            // preload an existing (data:/blob:) image, same-origin so toBlob still works
+    const im = new Image();
+    im.onload = () => {
+      this.img = im;
+      this.base = Math.max(this.outW/im.width, this.outH/im.height); // "cover"
+      this.scale = 1; this.ox = 0; this.oy = 0; this.zoomEl.value = "1";
+      $("meEditWrap").classList.remove("hidden");
+      $("meSave").disabled = false;
+      this.draw();
+    };
+    im.src = url;
+  },
   reset(){ this.scale = 1; this.ox = 0; this.oy = 0; this.zoomEl.value = "1"; this.draw(); },
   draw(){
     const ctx = this.c.getContext("2d");
@@ -349,9 +361,13 @@ function openModal(slot){
   const curUrl = (staged[slot.key] && staged[slot.key].url) || current[slot.key] || "";
   const ci = $("meCurrent");
   if (curUrl){ ci.src = curUrl; $("meCurrentWrap").classList.remove("hidden"); } else { $("meCurrentWrap").classList.add("hidden"); }
-  $("meEditWrap").classList.add("hidden");
-  $("meSave").disabled = true;
   $("meFile").value = "";
+  if (curUrl){
+    me.loadURL(curUrl);   // start from what's on the device so you can re-position/zoom it
+  } else {
+    $("meEditWrap").classList.add("hidden");
+    $("meSave").disabled = true;
+  }
   $("modal").classList.remove("hidden");
 }
 function closeModal(){ $("modal").classList.add("hidden"); me.slot = null; }
