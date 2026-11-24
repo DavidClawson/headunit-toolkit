@@ -11,13 +11,20 @@ redistributes vendor firmware or the proprietary CarPlay / Android Auto
 modules. See [`docs/legal-and-scope.md`](docs/legal-and-scope.md) before
 publishing anything built with it.
 
-> ⚠️ **Status: early work — static-analysis findings, hardware validation in
-> progress.** The parsers, the logo/wallpaper/string tools, and the format specs
-> are verified against a real `LTTF133.img`. But most of the deeper findings
-> (boot chain, loadable-module format, Bluetooth/OBD ideas, the Lua-host design)
-> are **reverse-engineered from the firmware and not yet confirmed on hardware** —
-> a bench unit is on the way and these will be tested and corrected. Treat the
-> RE notes as working hypotheses, keep your original firmware, and see
+> ✅ **Validated on real hardware (bench unit, Nov 2026).** The USB-update
+> pipeline and two modding lanes — **custom images** (boot splash) and
+> **user-facing menu text** (relabels / translations) — flash and display
+> correctly on a live unit, with CarPlay / Android Auto left intact.
+>
+> ⚠️ **Key hardware finding:** this firmware paints its prominent, *dynamic* UI in
+> code, so editing `DATAV1` widget colors/positions does **not** reliably change
+> the screen — re-skins go through **images**, and relabels must target the string
+> file the shown screen actually reads (the launcher grid reads `Main.txt` /
+> `SystemBar.txt`, not `Setup.txt`).
+>
+> ⚠️ **Still unvalidated:** the deeper findings (boot chain, loadable-module
+> format, Bluetooth / OBD, the Lua-host design) are reverse-engineered and not yet
+> confirmed on hardware. Keep your original firmware; see
 > [Safety](#safety-in-one-line) before flashing anything.
 
 ## What it does today
@@ -93,20 +100,29 @@ recovery doc.
 
 ## Status
 
-**Early, and actively being tested.** Two tiers:
+**Early, but the core now works on real hardware.** Three tiers:
 
-- **Verified against a real `LTTF133.img`** (26-partition image, model "W022"):
-  the IMAGEWTY / MINFS / `DATAV1.0` readers, the logo builder, the `DATAV1.0`
-  widget editor, the LZMA payload decompressor, and the **MINFS repacker**
-  (resize/replace any file, checksum-correct) — see `scripts/repack_selftest.py`.
-  The factory-menu codes and the container/filesystem/screen format specs are
-  high-confidence.
+- **✅ Validated on a live unit** (bench W022, Nov 2026): the whole
+  build → repack → checksum → USB-flash → boot path, with CarPlay/Android Auto
+  intact. Two visible-mod lanes confirmed end-to-end: **custom images** (boot
+  splash) and **user-facing menu text** (tile relabels; length-changing edits
+  work — the repacker's in-place *and* relocation paths are both honored on the
+  device — though labels are clipped to the layout's fixed field width, so a
+  translation must fit or the text widget needs widening). Caveat learned on
+  hardware:
+  the firmware **code-draws its prominent/dynamic widgets**, so `DATAV1`
+  widget-attribute edits (color/geometry) don't reliably surface — re-skins go
+  through images, and relabels must target the string file the shown screen reads.
+- **Offline-verified against a real `LTTF133.img`** (26-partition image, model
+  "W022"): the IMAGEWTY / MINFS / `DATAV1.0` readers, the logo builder, the
+  `DATAV1.0` widget editor, the LZMA payload decompressor, and the **MINFS
+  repacker** — see `scripts/repack_selftest.py`. Factory-menu codes and the
+  container/filesystem/screen format specs are high-confidence.
 - **Reverse-engineered, not yet hardware-validated:** the open-boot-chain
   analysis, the loadable-module (`.mod`) format and injection path, the
   Bluetooth/OBD-II findings, and the Lua-host design. These come from static
-  analysis of the stock image; a **bench unit is inbound** and they'll be
-  confirmed or corrected on real hardware. The u-boot SD boot selector is
-  designed but not yet built.
+  analysis of the stock image and will be confirmed or corrected on the bench.
+  The u-boot SD boot selector is designed but not yet built.
 
 Contributions, corrections, and especially **"I tried this on my unit and…"**
 reports are very welcome — this is exactly the stage where real-hardware data is
