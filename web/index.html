@@ -122,6 +122,8 @@
   .cfg-how { margin:.2rem 0 .9rem; font-size:.9rem; }
   .cfg-how summary { cursor:pointer; color:var(--accent); }
   .cfg-how ol { margin:.5rem 0 0; padding-left:1.2rem; color:var(--muted); line-height:1.6; }
+  .cfg-note { margin:.6rem 0 .2rem; padding:.55rem .7rem; border-radius:6px;
+    background:rgba(230,160,0,.12); border:1px solid rgba(230,160,0,.5); line-height:1.5; }
   .cfg-grp { font-size:.95rem; margin:1.1rem 0 .4rem; padding-bottom:.25rem;
     border-bottom:1px solid var(--line); color:var(--muted); font-weight:600;
     text-transform:uppercase; letter-spacing:.04em; }
@@ -186,12 +188,15 @@
   <summary class="cfg-summary">Advanced — Device settings <span class="muted" style="font-size:.72em;font-weight:400">· clock, brightness, Bluetooth name, region · no firmware flash</span></summary>
   <p class="muted" style="margin:.7rem 0 .7rem">Change safe settings — clock format, brightness, Bluetooth name, startup volume, radio region — by loading the <code>Config.ini</code> your unit exports, then re-importing it. This never touches the firmware image, and the unit just reboots to apply.</p>
   <details class="cfg-how">
-    <summary>How to get your <code>Config.ini</code> (one-time, on the unit)</summary>
+    <summary>How to export &amp; import your <code>Config.ini</code> (on the unit)</summary>
+    <p class="cfg-note">⚠️ Use a <b>FAT32 USB stick with no <code>Update</code> folder on it.</b> If an <code>Update</code> folder is present, the unit tries to flash firmware instead. An empty stick is ideal — it'll just say &ldquo;No music found,&rdquo; which is fine.</p>
     <ol>
-      <li>On the unit: <b>Settings &rarr; Factory Set</b>, enter password <code>666999</code>.</li>
-      <li>Open <b>Configure Setting</b>, insert a USB stick, and tap <b>Export</b> at the bottom &mdash; it writes <code>Config.ini</code> to the stick's root.</li>
-      <li>Load that file below, change what you want, and <b>download</b> it.</li>
-      <li>Copy it back to the stick's root, and tap <b>Import</b> on that same screen. The unit reboots with your changes.</li>
+      <li><b>Insert the stick, then press Home.</b> (Plugging it in jumps to the music player / &ldquo;No music file&rdquo; — Home gets you back to the home screen.)</li>
+      <li>Open <b>Settings &rarr; Factory Set</b>, enter <code>666999</code>, and press <b>Enter</b>.</li>
+      <li>Open <b>Configure Setting</b> and scroll all the way down &mdash; you'll see three buttons: <b>Save</b>, <b>Export</b>, and <b>Import config file</b>.</li>
+      <li>Tap <b>Export config file</b> &mdash; it writes <code>Config.ini</code> to the stick.</li>
+      <li>Load that file below, change what you want, and <b>Download</b> it.</li>
+      <li>Copy the downloaded file back onto the stick, return to this screen, and tap <b>Import config file</b>. The unit reboots with your changes.</li>
     </ol>
   </details>
   <div class="drop" id="cfgDrop">
