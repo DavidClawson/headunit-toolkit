@@ -36,6 +36,10 @@
     padding: 16px;
   }
   .wrap { max-width: 760px; margin: 0 auto; }
+  #editCard.is-waiting { opacity:.55; }
+  #editCard.is-waiting .slots, #editCard .editp { display:none; }
+  #editCard.is-waiting .editp { display:block; }
+  #editCard.is-waiting .editr { display:none; }
   h1 { font-size: 1.5rem; margin: .2em 0 .1em; }
   .sub { color: var(--muted); margin: 0 0 1rem; }
   .privacy {
@@ -162,9 +166,10 @@
     <div class="muted" id="imgInfo" style="margin-top:.6rem">Use the original image the vendor sent you — keep a copy as your restore point.</div>
   </div>
 
-  <div class="card hidden" id="editCard">
+  <div class="card is-waiting" id="editCard">
     <h2><span class="step">2</span> Edit the images</h2>
-    <p class="muted" style="margin:-.3rem 0 .8rem">These are what's on the firmware now. <strong>Click any one</strong> to drop in a new picture, position &amp; zoom it, and save. Slots you don't touch are left exactly as they are.</p>
+    <p class="muted editp" style="margin:-.3rem 0 .4rem">Load your firmware above first — then the boot splash, wallpapers, and logo choices on it appear here to edit.</p>
+    <p class="muted editr" style="margin:-.3rem 0 .8rem">These are what's on the firmware now. <strong>Click any one</strong> to drop in a new picture, position &amp; zoom it, and save. Slots you don't touch are left exactly as they are.</p>
     <div class="slots" id="slots"></div>
   </div>
 
@@ -182,7 +187,6 @@
 
   <p class="muted">Safe resource edits only (boot splash &amp; wallpapers). Boot-chain and module work stay on the command line / bench unit. Keep your stock image — every edit here is reversible by reflashing it.</p>
   <p class="muted" style="font-size:.85rem">This page keeps <strong>anonymous, cookieless</strong> visit and build counts (via <a href="https://www.goatcounter.com" rel="noopener">GoatCounter</a>) so I can see how many people find it useful. No personal data, no tracking across sites — and your firmware still never leaves your browser.</p>
-</div>
 
 <details class="card" id="cfgCard">
   <summary class="cfg-summary">Advanced — Device settings <span class="muted" style="font-size:.72em;font-weight:400">· clock, brightness, Bluetooth name, region · no firmware flash</span></summary>
@@ -207,6 +211,7 @@
   <a id="cfgDl" class="hidden"></a>
   <div id="cfgMsg" class="muted" style="margin-top:.6rem"></div>
 </details>
+</div>
 
 <!-- edit modal -->
 <div class="modal hidden" id="modal">
@@ -309,6 +314,7 @@ async function loadImage(file){
     $("imgInfo").textContent = `Parsed OK — ${n} partitions, ${(buf.length/1048576).toFixed(1)} MB.`;
     log("Firmware loaded — click an image below to change it, then Build.");
     refresh();
+    $("editCard").classList.remove("is-waiting");  // step 2 becomes active
     showCurrent(buf);
   } catch (e){
     imageBytes = null;
@@ -349,7 +355,7 @@ function showCurrent(buf){
     (o.wallpapers || []).forEach((u,i) => { current["w"+i] = u || null; setSlotImg("w"+i, u || null); });
     (o.logos || []).forEach((u,i) => { const k = "l"+(i+2); current[k] = u || null; setSlotImg(k, u || null); });
     for (const s of SLOTS) slotEl(s.key).classList.remove("modified");
-    $("editCard").classList.remove("hidden");
+    $("editCard").classList.remove("is-waiting");
   } catch(e){ /* previews optional — don't block the tool */ }
 }
 
