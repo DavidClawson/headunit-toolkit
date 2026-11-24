@@ -4,12 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Head Unit Configurator — customize your Allwinner F133 car stereo</title>
-<meta name="description" content="Free, open-source browser tool to customize cheap Allwinner F133 (Melis) car stereos — custom boot splash, wallpaper, and menu text. Runs entirely in your browser; your firmware never leaves the page.">
+<meta name="description" content="Free, open-source browser tool to customize cheap Allwinner F133 (Melis) car stereos — custom boot splash and wallpapers. Runs entirely in your browser; your firmware never leaves the page.">
 <meta name="keywords" content="Allwinner F133, D1s, Melis, car stereo firmware, head unit mod, custom boot logo, double din, LTTF133, JOY-W022, aftermarket car radio, carplay android auto head unit">
 <link rel="canonical" href="https://davidclawson.github.io/headunit-toolkit/web/">
 <meta property="og:type" content="website">
 <meta property="og:title" content="Open Head Unit Toolkit — customize your Allwinner F133 car stereo">
-<meta property="og:description" content="Custom boot splash, wallpaper, and menu text for cheap Allwinner F133 car stereos — in your browser, firmware never uploaded. Open source.">
+<meta property="og:description" content="Custom boot splash and wallpapers for cheap Allwinner F133 car stereos — in your browser, firmware never uploaded. Open source.">
 <meta property="og:url" content="https://davidclawson.github.io/headunit-toolkit/web/">
 <meta name="twitter:card" content="summary">
 <style>
@@ -52,7 +52,7 @@
   .step { display:inline-grid; place-items:center; width:1.5rem; height:1.5rem;
     border-radius:50%; background:var(--accent); color:var(--accent-ink);
     font-size:.8rem; font-weight:700; }
-  label.row { display:flex; gap:.6rem; align-items:center; margin:.5rem 0; flex-wrap:wrap; }
+  .row { display:flex; gap:.6rem; align-items:center; margin:.5rem 0; flex-wrap:wrap; }
   input[type=file] { max-width:100%; }
   select, button {
     font: inherit; border-radius: 8px; border: 1px solid var(--line);
@@ -80,19 +80,40 @@
   }
   .muted { color: var(--muted); font-size: .85rem; }
   a { color: var(--accent); }
-  .hidden { display: none; }
+  .hidden { display: none !important; }
   code { background: var(--code); padding: .05rem .35rem; border-radius: 5px; }
-  .thumbs { display:flex; gap:.7rem; flex-wrap:wrap; }
-  .thumbs figure { margin:0; width:150px; }
-  .thumbs img { width:100%; border:1px solid var(--line); border-radius:8px;
-    display:block; background:var(--code); aspect-ratio:16/9; object-fit:cover; }
-  .thumbs figcaption { font-size:.78rem; color:var(--muted); text-align:center; margin-top:.25rem; }
-  .editor { margin:.3rem 0 .8rem; }
-  .editor canvas { width:100%; max-width:420px; display:block; border:1px solid var(--line);
+
+  /* editable slot thumbnails */
+  .slots { display:flex; gap:.8rem; flex-wrap:wrap; }
+  .slot { margin:0; width:160px; cursor:pointer; }
+  .slot .slot-img { position:relative; border-radius:8px; overflow:hidden;
+    border:1px solid var(--line); background:var(--code); aspect-ratio:16/9; }
+  .slot .slot-img img { width:100%; height:100%; object-fit:cover; display:block; visibility:hidden; }
+  .slot .ov { position:absolute; inset:0; display:grid; place-items:center;
+    background:rgba(0,0,0,.45); color:#fff; font-weight:600; opacity:0; transition:opacity .15s; }
+  .slot:hover .ov, .slot:focus-visible .ov { opacity:1; }
+  .slot .badge { position:absolute; top:5px; right:5px; background:var(--accent);
+    color:var(--accent-ink); font-size:.68rem; padding:.08rem .4rem; border-radius:6px; display:none; }
+  .slot.modified .badge { display:inline-block; }
+  .slot figcaption { font-size:.78rem; color:var(--muted); text-align:center; margin-top:.3rem; }
+
+  /* editor canvas (used inside the modal) */
+  .editor canvas { width:100%; max-width:440px; display:block; border:1px solid var(--line);
     border-radius:8px; background:#000; cursor:grab; touch-action:none; }
   .editor canvas:active { cursor:grabbing; }
   .editor input[type=range] { flex:1; max-width:260px; }
-  .edit-block { margin:.3rem 0; }
+
+  /* modal */
+  .modal { position:fixed; inset:0; background:rgba(0,0,0,.55); display:grid;
+    place-items:center; padding:16px; z-index:50; }
+  .modal-box { background:var(--panel); border:1px solid var(--line); border-radius:var(--radius);
+    padding:1.1rem 1.2rem; max-width:520px; width:100%; max-height:92vh; overflow:auto; position:relative; }
+  .modal-box h3 { margin:.1rem 0 .6rem; font-size:1.05rem; }
+  .modal-x { position:absolute; top:.5rem; right:.6rem; border:none; background:transparent;
+    font-size:1.2rem; cursor:pointer; color:var(--muted); padding:.1rem .3rem; }
+  .me-current { display:flex; gap:.6rem; align-items:center; margin:.2rem 0 .8rem; }
+  .me-current img { width:130px; border:1px solid var(--line); border-radius:6px;
+    object-fit:cover; aspect-ratio:16/9; background:var(--code); }
 </style>
 </head>
 <body>
@@ -114,45 +135,10 @@
     <div class="muted" id="imgInfo" style="margin-top:.6rem">Use the original image the vendor sent you — keep a copy as your restore point.</div>
   </div>
 
-  <div class="card hidden" id="currentCard">
-    <h2><span class="step">★</span> Currently on this image</h2>
-    <p class="muted" style="margin:-.3rem 0 .7rem">What's on the firmware you loaded — your edits below replace these.</p>
-    <div class="thumbs">
-      <figure><img id="curSplash" alt="current boot splash"><figcaption>Boot splash</figcaption></figure>
-      <figure><img id="curWall0" alt="wallpaper 1"><figcaption>Wallpaper 1</figcaption></figure>
-      <figure><img id="curWall1" alt="wallpaper 2"><figcaption>Wallpaper 2</figcaption></figure>
-      <figure><img id="curWall2" alt="wallpaper 3"><figcaption>Wallpaper 3</figcaption></figure>
-      <figure><img id="curWall3" alt="wallpaper 4"><figcaption>Wallpaper 4</figcaption></figure>
-    </div>
-  </div>
-
-  <div class="card" id="optsCard" style="opacity:.55; pointer-events:none;">
-    <h2><span class="step">2</span> Choose edits</h2>
-    <label class="row"><input type="checkbox" id="optTypos"> Fix menu typos (<code>botton</code>→button, <code>RDS swich</code>→switch)</label>
-
-    <div class="edit-block">
-      <label class="row">Boot splash: <input type="file" id="optSplash" accept="image/*"></label>
-      <div id="splashEditor" class="editor hidden">
-        <canvas id="splashCanvas" width="1280" height="720"></canvas>
-        <div class="row"><span class="muted">Drag · scroll to zoom</span><input type="range" id="splashZoom" min="1" max="3" step="0.01" value="1"><button type="button" id="splashReset">Reset</button></div>
-        <div class="muted" style="font-size:.78rem;margin-top:-.2rem">This frame is exactly the 1280×720 boot screen.</div>
-      </div>
-    </div>
-
-    <div class="edit-block">
-      <label class="row">Wallpaper: <input type="file" id="optWall" accept="image/*">
-        <select id="optWallSlot">
-          <option value="all">all four slots</option>
-          <option value="0">slot 1</option><option value="1">slot 2</option>
-          <option value="2">slot 3</option><option value="3">slot 4</option>
-        </select>
-      </label>
-      <div id="wallEditor" class="editor hidden">
-        <canvas id="wallCanvas" width="1024" height="600"></canvas>
-        <div class="row"><span class="muted">Drag · scroll to zoom</span><input type="range" id="wallZoom" min="1" max="3" step="0.01" value="1"><button type="button" id="wallReset">Reset</button></div>
-        <div class="muted" style="font-size:.78rem;margin-top:-.2rem">This frame is exactly the 1024×600 home screen.</div>
-      </div>
-    </div>
+  <div class="card hidden" id="editCard">
+    <h2><span class="step">2</span> Edit the images</h2>
+    <p class="muted" style="margin:-.3rem 0 .8rem">These are what's on the firmware now. <strong>Click any one</strong> to drop in a new picture, position &amp; zoom it, and save. Slots you don't touch are left exactly as they are.</p>
+    <div class="slots" id="slots"></div>
   </div>
 
   <div class="card">
@@ -167,13 +153,35 @@
     </p>
   </div>
 
-  <p class="muted">Prototype · safe resource edits only (splash, wallpaper, strings). Boot-chain and module work stay on the command line / bench unit. Keep your stock image — every edit here is reversible by reflashing it.</p>
+  <p class="muted">Safe resource edits only (boot splash &amp; wallpapers). Boot-chain and module work stay on the command line / bench unit. Keep your stock image — every edit here is reversible by reflashing it.</p>
+</div>
+
+<!-- edit modal -->
+<div class="modal hidden" id="modal">
+  <div class="modal-box">
+    <button class="modal-x" id="meX" aria-label="Close">✕</button>
+    <h3 id="meTitle">Edit</h3>
+    <div class="me-current" id="meCurrentWrap"><span class="muted">Currently on the device:</span><img id="meCurrent" alt="current slot image"></div>
+    <div class="drop" id="meDrop">
+      <div>Drop a new image here, or click to choose</div>
+      <input type="file" id="meFile" accept="image/*" class="hidden">
+    </div>
+    <div id="meEditWrap" class="editor hidden" style="margin-top:.7rem">
+      <canvas id="meCanvas"></canvas>
+      <div class="row"><span class="muted">Drag · scroll to zoom</span><input type="range" id="meZoom" min="1" max="3" step="0.01" value="1"><button type="button" id="meReset">Reset</button></div>
+      <div class="muted" id="meHint" style="font-size:.78rem;margin-top:-.2rem"></div>
+    </div>
+    <div class="row" style="margin-top:.8rem">
+      <button class="primary" id="meSave" disabled>Save</button>
+      <button id="meCancel">Cancel</button>
+    </div>
+  </div>
 </div>
 
 <script type="module">
 const PYODIDE = "https://cdn.jsdelivr.net/pyodide/v0.26.4/full/";
 const MODULES = ["__init__","imagewty","minfs","datav1","datav1_edit","decompress","logo","wallpaper","strings"];
-const ASSET_V = "6";  // bump to bust the browser cache of the fetched .py modules after an update
+const ASSET_V = "7";  // bump to bust the browser cache of the fetched .py modules after an update
 
 const $ = (id) => document.getElementById(id);
 const runtimePill = $("runtime"), logEl = $("log");
@@ -181,6 +189,17 @@ let pyodide = null, imageBytes = null, ready = false;
 
 function log(msg){ logEl.textContent = msg; }
 function setRuntime(text, cls){ runtimePill.textContent = text; runtimePill.className = "pill" + (cls ? " "+cls : ""); }
+
+// the five editable slots (splash + four wallpapers)
+const SLOTS = [
+  { key:"splash", label:"Boot splash", w:1280, h:720, where:"boot screen" },
+  { key:"w0", label:"Wallpaper 1", w:1024, h:600, idx:0, where:"home screen" },
+  { key:"w1", label:"Wallpaper 2", w:1024, h:600, idx:1, where:"home screen" },
+  { key:"w2", label:"Wallpaper 3", w:1024, h:600, idx:2, where:"home screen" },
+  { key:"w3", label:"Wallpaper 4", w:1024, h:600, idx:3, where:"home screen" },
+];
+const current = {};  // key -> data URL already on the firmware
+const staged  = {};  // key -> { bytes, url } for slots the user has changed
 
 async function boot(){
   try {
@@ -213,12 +232,7 @@ async function boot(){
   }
 }
 
-function refresh(){
-  const haveImg = !!imageBytes;
-  $("optsCard").style.opacity = haveImg ? "1" : ".55";
-  $("optsCard").style.pointerEvents = haveImg ? "auto" : "none";
-  $("buildBtn").disabled = !(ready && haveImg);
-}
+function refresh(){ $("buildBtn").disabled = !(ready && imageBytes); }
 
 // --- firmware input (click + drag/drop) ---
 const drop = $("drop"), imgInput = $("imgInput");
@@ -235,9 +249,10 @@ async function loadImage(file){
     pyodide.globals.set("PEEK", buf);
     const n = pyodide.runPython(`from headunit.imagewty import ImageWTY\nImageWTY(bytes(PEEK.to_py())).num_files`);
     imageBytes = buf;
+    for (const k in staged) delete staged[k];  // fresh image → drop prior edits
     $("dropText").innerHTML = `✓ <code>${file.name}</code> loaded`;
     $("imgInfo").textContent = `Parsed OK — ${n} partitions, ${(buf.length/1048576).toFixed(1)} MB.`;
-    log("Firmware loaded. Choose your edits, then Build.");
+    log("Firmware loaded — click an image below to change it, then Build.");
     refresh();
     showCurrent(buf);
   } catch (e){
@@ -247,94 +262,145 @@ async function loadImage(file){
   }
 }
 
-// --- interactive image editor: drag to position + slider to zoom, WYSIWYG ---
-// The canvas is the exact slot resolution, so what you see is what gets written.
-class ImageEditor {
-  constructor(canvasId, zoomId, wrapId, resetId){
-    this.c = $(canvasId); this.zoomEl = $(zoomId); this.wrap = $(wrapId);
-    this.outW = this.c.width; this.outH = this.c.height;
-    this.img = null; this.scale = 1; this.ox = 0; this.oy = 0; this.base = 1;
-    this.zoomEl.addEventListener("input", () => { this.scale = parseFloat(this.zoomEl.value); this.draw(); });
-    $(resetId).addEventListener("click", () => this.reset());
-    this.c.addEventListener("wheel", ev => {
-      if(!this.img) return; ev.preventDefault();
-      const lo = parseFloat(this.zoomEl.min), hi = parseFloat(this.zoomEl.max);
-      this.scale = Math.min(hi, Math.max(lo, this.scale * (ev.deltaY < 0 ? 1.08 : 1/1.08)));
-      this.zoomEl.value = String(this.scale); this.draw();
-    }, {passive:false});
-    let drag = null;
-    const k = () => this.outW / (this.c.getBoundingClientRect().width || this.outW);
-    this.c.addEventListener("pointerdown", ev => { if(!this.img) return; drag = {x:ev.clientX, y:ev.clientY, ox:this.ox, oy:this.oy, k:k()}; this.c.setPointerCapture(ev.pointerId); });
-    this.c.addEventListener("pointermove", ev => { if(!drag) return; this.ox = drag.ox + (ev.clientX-drag.x)*drag.k; this.oy = drag.oy + (ev.clientY-drag.y)*drag.k; this.draw(); });
-    const end = () => { drag = null; };
-    this.c.addEventListener("pointerup", end);
-    this.c.addEventListener("pointercancel", end);
+// --- build the slot thumbnails ---
+function buildSlots(){
+  const host = $("slots"); host.innerHTML = "";
+  for (const s of SLOTS){
+    const fig = document.createElement("figure");
+    fig.className = "slot"; fig.dataset.key = s.key; fig.tabIndex = 0;
+    fig.innerHTML = `<div class="slot-img"><img alt="${s.label}"><span class="ov">✎ Edit</span><span class="badge">edited</span></div><figcaption>${s.label}</figcaption>`;
+    const open = () => { if (imageBytes) openModal(s); };
+    fig.addEventListener("click", open);
+    fig.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } });
+    host.appendChild(fig);
   }
+}
+buildSlots();
+
+function slotEl(key){ return document.querySelector(`.slot[data-key="${key}"]`); }
+function setSlotImg(key, url){
+  const el = slotEl(key); if (!el) return;
+  const img = el.querySelector("img");
+  if (url){ img.src = url; img.style.visibility = "visible"; } else { img.style.visibility = "hidden"; }
+}
+
+// --- read what's currently on the firmware ---
+function showCurrent(buf){
+  try {
+    pyodide.globals.set("PV", buf);
+    const r = pyodide.runPython(`import configurator\nconfigurator.preview_data_urls(bytes(PV.to_py()))`);
+    const o = r.toJs({dict_converter: Object.fromEntries}); r.destroy && r.destroy();
+    current.splash = o.splash || null; setSlotImg("splash", current.splash);
+    (o.wallpapers || []).forEach((u,i) => { current["w"+i] = u || null; setSlotImg("w"+i, u || null); });
+    for (const s of SLOTS) slotEl(s.key).classList.remove("modified");
+    $("editCard").classList.remove("hidden");
+  } catch(e){ /* previews optional — don't block the tool */ }
+}
+
+// --- the modal editor (one reusable canvas) ---
+const me = {
+  c: $("meCanvas"), zoomEl: $("meZoom"),
+  img: null, scale: 1, ox: 0, oy: 0, base: 1, outW: 0, outH: 0, slot: null,
+  setSlot(s){ this.slot = s; this.outW = s.w; this.outH = s.h; this.c.width = s.w; this.c.height = s.h; this.img = null; },
   load(file){
     const im = new Image();
     im.onload = () => {
       this.img = im;
       this.base = Math.max(this.outW/im.width, this.outH/im.height); // "cover"
       this.scale = 1; this.ox = 0; this.oy = 0; this.zoomEl.value = "1";
-      this.wrap.classList.remove("hidden");
+      $("meEditWrap").classList.remove("hidden");
+      $("meSave").disabled = false;
       this.draw();
     };
     im.src = URL.createObjectURL(file);
-  }
-  clear(){ this.img = null; this.wrap.classList.add("hidden"); }
-  reset(){ this.scale = 1; this.ox = 0; this.oy = 0; this.zoomEl.value = "1"; this.draw(); }
-  hasImage(){ return !!this.img; }
+  },
+  reset(){ this.scale = 1; this.ox = 0; this.oy = 0; this.zoomEl.value = "1"; this.draw(); },
   draw(){
     const ctx = this.c.getContext("2d");
     ctx.fillStyle = "#000"; ctx.fillRect(0,0,this.outW,this.outH);
     if(!this.img) return;
     const s = this.base * this.scale, dw = this.img.width*s, dh = this.img.height*s;
     ctx.drawImage(this.img, (this.outW-dw)/2 + this.ox, (this.outH-dh)/2 + this.oy, dw, dh);
-  }
-  bytes(){ // Promise<Uint8Array>, JPEG at full slot resolution
-    return new Promise(res => this.c.toBlob(b => b.arrayBuffer().then(a => res(new Uint8Array(a))), "image/jpeg", 0.95));
-  }
-}
-const splashEd = new ImageEditor("splashCanvas","splashZoom","splashEditor","splashReset");
-const wallEd   = new ImageEditor("wallCanvas","wallZoom","wallEditor","wallReset");
-$("optSplash").addEventListener("change", e => { const f = e.target.files[0]; f ? splashEd.load(f) : splashEd.clear(); });
-$("optWall").addEventListener("change", e => { const f = e.target.files[0]; f ? wallEd.load(f) : wallEd.clear(); });
+  },
+  bytes(){ return new Promise(res => this.c.toBlob(b => b.arrayBuffer().then(a => res(new Uint8Array(a))), "image/jpeg", 0.95)); },
+};
+me.zoomEl.addEventListener("input", () => { me.scale = parseFloat(me.zoomEl.value); me.draw(); });
+$("meReset").addEventListener("click", () => me.reset());
+me.c.addEventListener("wheel", ev => {
+  if(!me.img) return; ev.preventDefault();
+  const lo = parseFloat(me.zoomEl.min), hi = parseFloat(me.zoomEl.max);
+  me.scale = Math.min(hi, Math.max(lo, me.scale * (ev.deltaY < 0 ? 1.08 : 1/1.08)));
+  me.zoomEl.value = String(me.scale); me.draw();
+}, {passive:false});
+(function(){
+  let drag = null;
+  const k = () => me.outW / (me.c.getBoundingClientRect().width || me.outW);
+  me.c.addEventListener("pointerdown", ev => { if(!me.img) return; drag = {x:ev.clientX, y:ev.clientY, ox:me.ox, oy:me.oy, k:k()}; me.c.setPointerCapture(ev.pointerId); });
+  me.c.addEventListener("pointermove", ev => { if(!drag) return; me.ox = drag.ox + (ev.clientX-drag.x)*drag.k; me.oy = drag.oy + (ev.clientY-drag.y)*drag.k; me.draw(); });
+  const end = () => { drag = null; };
+  me.c.addEventListener("pointerup", end);
+  me.c.addEventListener("pointercancel", end);
+})();
 
-// --- show what's currently on the loaded firmware ---
-function showCurrent(buf){
-  try {
-    pyodide.globals.set("PV", buf);
-    const r = pyodide.runPython(`import configurator\nconfigurator.preview_data_urls(bytes(PV.to_py()))`);
-    const o = r.toJs({dict_converter: Object.fromEntries}); r.destroy && r.destroy();
-    const set = (id, url) => { const el = $(id); if(url){ el.src = url; el.style.display = "block"; } else { el.style.display = "none"; } };
-    set("curSplash", o.splash);
-    (o.wallpapers || []).forEach((u,i) => set("curWall"+i, u));
-    $("currentCard").classList.remove("hidden");
-  } catch(e){ /* previews are optional — don't block the tool */ }
+function openModal(slot){
+  me.setSlot(slot);
+  $("meTitle").textContent = `${slot.label} · ${slot.w}×${slot.h}`;
+  $("meHint").textContent = `This frame is exactly the ${slot.w}×${slot.h} ${slot.where}.`;
+  const curUrl = (staged[slot.key] && staged[slot.key].url) || current[slot.key] || "";
+  const ci = $("meCurrent");
+  if (curUrl){ ci.src = curUrl; $("meCurrentWrap").classList.remove("hidden"); } else { $("meCurrentWrap").classList.add("hidden"); }
+  $("meEditWrap").classList.add("hidden");
+  $("meSave").disabled = true;
+  $("meFile").value = "";
+  $("modal").classList.remove("hidden");
 }
+function closeModal(){ $("modal").classList.add("hidden"); me.slot = null; }
+$("meX").addEventListener("click", closeModal);
+$("meCancel").addEventListener("click", closeModal);
+$("modal").addEventListener("click", e => { if (e.target === $("modal")) closeModal(); });
+document.addEventListener("keydown", e => { if (e.key === "Escape" && !$("modal").classList.contains("hidden")) closeModal(); });
+
+const meDrop = $("meDrop"), meFile = $("meFile");
+meDrop.addEventListener("click", () => meFile.click());
+["dragover","dragenter"].forEach(ev => meDrop.addEventListener(ev, e => { e.preventDefault(); meDrop.classList.add("hot"); }));
+["dragleave","drop"].forEach(ev => meDrop.addEventListener(ev, e => { e.preventDefault(); meDrop.classList.remove("hot"); }));
+meDrop.addEventListener("drop", e => { const f = e.dataTransfer.files[0]; if (f) me.load(f); });
+meFile.addEventListener("change", e => { const f = e.target.files[0]; if (f) me.load(f); });
+
+$("meSave").addEventListener("click", async () => {
+  if (!me.img || !me.slot) return;
+  const bytes = await me.bytes();
+  const url = URL.createObjectURL(new Blob([bytes], {type:"image/jpeg"}));
+  staged[me.slot.key] = { bytes, url };
+  const el = slotEl(me.slot.key);
+  el.classList.add("modified");
+  el.querySelector("img").src = url;
+  el.querySelector("img").style.visibility = "visible";
+  closeModal();
+});
 
 $("buildBtn").addEventListener("click", async () => {
   if (!(ready && imageBytes)) return;
+  const keys = Object.keys(staged);
+  if (keys.length === 0){ log("No changes yet — click an image above to replace it, then Build."); return; }
   $("buildBtn").disabled = true;
   log("Building… (this runs entirely in your browser)");
   try {
     pyodide.globals.set("IMAGE", imageBytes);
-    pyodide.globals.set("SPLASH", splashEd.hasImage() ? await splashEd.bytes() : null);
-    pyodide.globals.set("WP", wallEd.hasImage() ? await wallEd.bytes() : null);
-    pyodide.globals.set("FIX", $("optTypos").checked);
-    pyodide.globals.set("SLOT", $("optWallSlot").value);
+    pyodide.globals.set("SPLASH", staged.splash ? staged.splash.bytes : null);
+    pyodide.globals.set("WALLS", [0,1,2,3].map(i => staged["w"+i] ? staged["w"+i].bytes : null));
     const logProxy = pyodide.runPython(`
 import configurator
 _img = bytes(IMAGE.to_py())
 _sp = bytes(SPLASH.to_py()) if SPLASH is not None else None
-_wp = bytes(WP.to_py()) if WP is not None else None
-_out, _log = configurator.apply(_img, fix_typos=FIX, splash=_sp, wallpaper=_wp, wallpaper_slot=SLOT)
+_wl = [ (bytes(w) if w is not None else None) for w in WALLS.to_py() ]
+_out, _log = configurator.apply_edits(_img, splash=_sp, wallpapers=_wl)
 with open("/out.img", "wb") as _f: _f.write(_out)
 _log
 `);
-    const outBytes = pyodide.FS.readFile("/out.img");  // -> Uint8Array
-    const lines = logProxy.toJs();                      // Python list -> Array<string>
-    logProxy.destroy?.();
+    const outBytes = pyodide.FS.readFile("/out.img");
+    const lines = logProxy.toJs();
+    logProxy.destroy && logProxy.destroy();
     const blob = new Blob([outBytes], { type: "application/octet-stream" });
     const a = $("dl");
     a.href = URL.createObjectURL(blob);

@@ -66,6 +66,42 @@ def _tmp(data: bytes) -> str:
     return f.name
 
 
+def apply_edits(image_bytes: bytes, *, splash: bytes | None = None,
+                wallpapers: list | None = None) -> tuple[bytes, list[str]]:
+    """Apply per-slot image edits and return ``(patched_bytes, log_lines)``.
+
+    ``splash`` replaces the boot logo. ``wallpapers`` is a list of up to 4
+    entries (``bytes`` to replace that slot, ``None`` to leave it); index i maps
+    to ``/WallPaper/i.jpg``. Each edit rewrites the MINFS partition with a
+    corrected checksum, so they compose. Nothing is uploaded.
+    """
+    log: list[str] = []
+    img = ImageWTY(bytes(image_bytes))
+    log.append(f"Loaded image — {img.num_files} partitions.")
+
+    for i, wp in enumerate(wallpapers or []):
+        if wp is None:
+            continue
+        if not 0 <= i < SLOTS:
+            continue
+        path = _tmp(wp)
+        try:
+            set_wallpaper(img, i, path)
+            log.append(f"Wallpaper {i + 1} — replaced.")
+        finally:
+            os.unlink(path)
+
+    if splash is not None:
+        path = _tmp(splash)
+        try:
+            jpg = swap_logo(img, path)
+            log.append(f"Boot splash — replaced ({len(jpg)} bytes).")
+        finally:
+            os.unlink(path)
+
+    return bytes(img.to_bytes()), log
+
+
 def apply(image_bytes: bytes, *, fix_typos: bool = False,
           splash: bytes | None = None,
           wallpaper: bytes | None = None,
