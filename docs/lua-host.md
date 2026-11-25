@@ -182,7 +182,8 @@ loaded.** Ordered:
    `ecall` with the SDK's numbering. Full spec in
    [format-minfs.md](format-minfs.md#what-a-module-is-fixed-address-code--a-descriptor);
    `headunit decompress --elf` unpacks all 63 stock modules exactly.
-2. **Hello-world module that loads**: the real proof. Build with
+2. **Hello-world module that loads**: the real proof. **Built and emulator-tested;
+   awaiting the bench boot**: see [hostmod/](../hostmod/README.md). Build with
    `riscv64-elf-gcc`, link at `0xe0000000 + type × 1 MiB` (test type `0x75`, unused
    by every stock module), and load it with **one line in `/startup.sh`** (see
    injection below). It prints over the UART. Converges with the

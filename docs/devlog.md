@@ -233,3 +233,47 @@ growing the directory. That's the next toolkit feature, along with teaching
   image, so it's likely the factory default and a useful reference for the Device
   settings editor.
 - `/rootfs_ini.tmp` is the vendor packer's config: LZMA-compress `drv, mod, plg, axf`.
+
+---
+
+## 2026-11-24 (evening) — Milestone 2 built: `hostmod/hello.mod`, emulator-tested, ready for the bench
+
+### Loading path (verified against the stock *kernel*, not just the SDK)
+
+- Decompressed the kernel: `melis_pkg_nor.fex` is a `sunxi-package` whose
+  `melis-lzma` item (at `0x400`) is a standard LZMA-alone stream → 2.24 MB image
+  at `0x40000000` (OpenSBI then kernel).
+- It contains the SDK's **plain-ELF fallback loader** (`invalid elf file to
+  loader`, `module format cant recongnized`). Disassembly of `LDR_LoadELFFile`
+  (`0x4010aef2`): `memset` 0x34 (ELF32 header), 0x28 (ELF32 section header), 0x80
+  (magic peek), `fread(hdr, 0x34)`, `e_shentsize` from the file, `strncmp(name, 5)`
+  for `MAGIC`, `strncmp(magic, 8)` for `ePDK.mod`/`ePDK.exf`.
+- So a **plain MINFS file** (no module flag → ROMLDR ioctl returns `-EINVAL`)
+  holding an ELF32-layout module loads via `insmod`. The stock image has two
+  **empty placeholder files** (`/mod/cedar/readme.txt`, `/mod/willow/readme.txt`),
+  so injection is *replace the placeholder + add one `/startup.sh` line*, both
+  edits the repacker already does. No MINFS "add file" feature needed.
+- Caught before hardware: `esMODS_MInstall` copies the **whole** MAGIC section
+  into an 80-byte stack struct, so a descriptor padded to 128 B (to match the
+  0x80 peek) would have smashed the kernel stack. Descriptor is fixed at 80 B,
+  enforced by `_Static_assert` and by `pack-module`.
+
+### Built
+
+- `hostmod/`: clean-room `include/melis.h` (descriptor + `MELIS_MODULE()` macro +
+  `ecall` wrappers whose numbers stock modules use), `module.ld`, Makefile
+  (`riscv64-elf-gcc` 16.2, `rv64gc`, `medany`, `--no-relax`), `hello/hello.c`.
+- `headunit pack-module` (ELF64 → Melis ELF32-layout, with descriptor/address
+  checks) and `headunit install-module` (placeholder + `startup.sh` line,
+  idempotent, CRLF-preserving).
+- `scripts/emulate_module.py`: loads the packed file like the kernel, runs
+  `MInit`/`MOpen`/the thread in Unicorn with a fake syscall layer. **PASS**: banner
+  printed, handle returned, thread prio `0xd506` (= mid 213 << 8 | 6, the stock
+  convention), `F:\HELLO.TXT` written (102 B); with no stick it polls F:–K: every 2 s.
+- Test image: only `data_udisk.fex` + its checksum differ from stock.
+
+### Next
+
+Bench boot (procedure in [hostmod/README.md](../hostmod/README.md)). Success =
+`HELLO.TXT` on the stick. Then: confirm the drive letter, try loading from the stick
+directly (`insmod f:\x.mod`), and start on the Lua VM (milestone 3).

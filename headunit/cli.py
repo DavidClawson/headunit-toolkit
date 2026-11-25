@@ -78,6 +78,30 @@ def cmd_decompress(args):
         sys.stdout.buffer.write(out)
 
 
+def cmd_pack_module(args):
+    from .modpack import pack_module, read_packed, check_module
+    with open(args.elf, "rb") as fh:
+        mod = pack_module(fh.read())
+    info = check_module(read_packed(mod))
+    with open(args.out, "wb") as fh:
+        fh.write(mod)
+    print(f"packed {args.out}: type {info['type']:#04x} @ {info['base']:#x}, "
+          f"{info['size']} bytes in memory, MInit {info['MInit']:#x}, "
+          f"{len(mod)}-byte file")
+
+
+def cmd_install_module(args):
+    from .modpack import install_module
+    img = _load_img(args.image)
+    with open(args.module, "rb") as fh:
+        info = install_module(img, fh.read(), args.slot)
+    out_img = _write_update(img, args.out)
+    print(f"installed module type {info['type']:#04x} at {info['slot']}")
+    print(f"/startup.sh now runs: {info['insmod']}")
+    print(f"wrote {out_img}")
+    print("Copy the whole 'Update' folder to a FAT32 USB stick.")
+
+
 def cmd_screen(args):
     img = _load_img(args.image)
     fs = MinFS(img.read(args.partition))
@@ -257,6 +281,21 @@ def main(argv=None):
     s.add_argument("--elf", action="store_true",
                    help="emit an ELF with every section at its load address (for Ghidra/objdump)")
     s.set_defaults(func=cmd_decompress)
+
+    s = sub.add_parser("pack-module",
+                       help="package a linked RV64 module ELF for the Melis loader (see hostmod/)")
+    s.add_argument("elf")
+    s.add_argument("out")
+    s.set_defaults(func=cmd_pack_module)
+
+    s = sub.add_parser("install-module",
+                       help="add a packed module to an image and insmod it from /startup.sh")
+    s.add_argument("image")
+    s.add_argument("module")
+    s.add_argument("--slot", default="/mod/willow/readme.txt",
+                   help="empty placeholder file to hold the module")
+    s.add_argument("--out", default="build")
+    s.set_defaults(func=cmd_install_module)
 
     s = sub.add_parser("screen", help="decode a DATAV1.0 screen layout")
     s.add_argument("image")
