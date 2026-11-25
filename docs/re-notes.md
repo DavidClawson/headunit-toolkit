@@ -4,30 +4,25 @@ Durable notes for the deeper static RE (loader ABI, module format). Nothing here
 is firmware — just offsets, addresses, and the recipe to reproduce the analysis
 from your own `stock/LTTF133.img`.
 
-## Decompressing the payloads
+## Unpacking modules
 
-`init.axf` and the `*.mod/.drv` modules are LZMA-packed (concatenated raw-LZMA1
-streams). Use the toolkit:
+`init.axf` and every `*.mod/.drv/.plg` are stored in MINFS as separately
+LZMA-compressed ELF sections at fixed addresses ([format-minfs.md](format-minfs.md)).
+All 63 modules (331 sections) unpack exactly:
 
 ```sh
-headunit decompress stock/LTTF133.img init.axf  --out init_axf.bin   # exact
-headunit decompress stock/LTTF133.img /auto.mod --out auto_mod.bin   # exact
-# carplay.mod / *.plg decode only partially today (flagged complete=False)
+headunit decompress stock/LTTF133.img /apps/init.axf --elf --out init.elf
+headunit decompress stock/LTTF133.img /mod/auto.mod  --elf --out auto.elf
+headunit decompress stock/LTTF133.img /apps/init.axf --out init.bin   # flat image @ 0xe9100000
 ```
 
-## `init.axf` link base = `0xe90e2e04`
+The `--elf` output carries every section at its true vaddr, so disassemblers
+need no base address. `init.axf` is `.text 0xe9100000`, `.rodata 0xe924badc`,
+`.data 0xe92c0bc8`, `.bss 0xe92fc0a0`.
 
-`init.axf` is **position-independent**, but its data holds **absolute pointers**
-linked at a fixed base. Recovered base = **`0xe90e2e04`** (VA of file offset 0),
-so `VA = 0xe90e2e04 + file_offset`.
-
-How it was found (reproducible): the loader references module-path strings
-(`d:\mod\*.mod`) through absolute pointers. Collect every aligned qword `V` and
-every module-path string file-offset `O`; the base that satisfies `V = base + O`
-for the most modules wins (8/13 here). The pointers sit in a rodata pointer pool
-around file `0x1583ec..0x158704` interleaved with log-string and function
-pointers (so it is *not* a clean array — the install loop walks it by base+index,
-which is why individual slots have no direct code xref).
+> **Retired:** the earlier "link base `0xe90e2e04`" (recovered by pointer voting
+> against the old, slightly mis-decoded flat output) and the "position-independent"
+> framing. Modules are linked at `0xe0000000 + type × 1 MiB`.
 
 ## Ghidra setup (headless)
 
@@ -37,39 +32,33 @@ Python scripts need PyGhidra on 12.x — **use Java `GhidraScript`s** in headles
 
 ```sh
 analyzeHeadless <proj_dir> initaxf \
-  -import init_axf.bin \
+  -import init.elf \
   -processor RISCV:LE:64:default \
-  -loader BinaryLoader -loader-baseAddr 0xe90e2e04 \
   -scriptPath <scripts> -postScript YourScript.java
 ```
 
-(For a module like `auto.mod`, base `0` is fine for disassembly, but its own
-absolute pointers — e.g. the descriptor pointer the entry stub returns — need
-that module's link base recovered the same way before they resolve.)
+(Import the `--elf` output with Ghidra's ELF loader, which places every section at
+its real address, so absolute pointers resolve without manual setup.)
 
 Use absolute paths (Ghidra rejects `./`). Drop `-deleteProject` to keep the
 project for fast `-process` re-runs without re-analyzing.
 
 ## Module ABI — what's known vs open
 
-**Known:**
-- Modules are raw PIC RISC-V code+data images, no ELF/magic header
-  ([format-minfs.md](format-minfs.md)).
-- Entry at offset 0 is a *get-descriptor stub*: `auipc a5,…; addi; ld a0,0(a5);
-  ret` — returns a pointer (loaded from a relocated slot) to the module's
-  descriptor/export structure.
-- Loaded by `esMODS_*` from a fixed list of `d:\mod\*.mod` slots; 10 of 13 are
-  unused → **resource-level injection** at an unused slot ([lua-host.md](lua-host.md)).
+**Known (2026-11-24, from the public D1s Melis SDK, verified on the stock image):**
+- Container, descriptor, load procedure, address scheme, and syscall numbering
+  are all documented in [format-minfs.md](format-minfs.md#what-a-module-is-fixed-address-code--a-descriptor).
+- Of the 13 `d:\mod\*.mod` slots the app tries, 8 ship and **5 are absent**
+  (`oak`, `pace`, `miracast`, `carlife`, `eclink`), giving a resource-level
+  injection point ([lua-host.md](lua-host.md)).
 
-**Open (needs interactive Ghidra + ideally the bench unit):**
-- The exact `esMODS_Install` call sequence and what it reads from the module.
-- The module descriptor/export table layout (follow the entry stub's pointer,
-  after recovering the module's own link base).
-- The trailer relocation/symbol tables' format.
+**Open:**
+- What `init.axf` does with each slot after `esMODS_MInstall` (which
+  `MOpen`/`MIoctrl` calls it makes), to pick the quietest absent slot.
+- MINFS "add file" support in the repacker (dentry area growth).
 
-These are interactive-RE shaped (follow xrefs, rename, read the live decompiler),
-so the efficient venue is the **Ghidra GUI** (import with the recipe above), and
-hypotheses are cheaply confirmed by loading a test module on the **bench unit**.
+The first is interactive-RE shaped (follow the slot-install xrefs in Ghidra), and
+is cheaply confirmed by loading a test module on the **bench unit**.
 
 ## Radios & Bluetooth transport (the OBD-II / network question)
 

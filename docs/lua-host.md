@@ -1,8 +1,9 @@
 # A Lua scripting host — turning the unit into an open platform
 
-> **Status: design / north-star.** Nothing here is built. It sits on top of one
-> unbuilt keystone (a loadable Melis module) and several open research questions,
-> all flagged below. This doc captures the architecture and the evidence so we
+> **Status: design / north-star.** Nothing here is built yet. The keystone's
+> research half is **done** (module format, loader ABI, and a data-driven
+> injection point are all mapped, as of 2026-11-24); what remains is building and
+> bench-testing a first module. Open questions are flagged below. This doc captures the architecture and the evidence so we
 > don't lose it.
 
 ## The idea in one line
@@ -174,15 +175,17 @@ script make a network request?" — yes, over WiFi.
 Everything rides on the keystone — **produce a loadable Melis module and get it
 loaded.** Ordered:
 
-1. **RE the module format + loader ABI.** Partly done: the *module decompressor*
-   exists (`headunit decompress`), and it establishes the format is a **raw PIC
-   RISC-V image, not ELF and not a container** (see Open questions). Remaining:
-   map the **trailer reloc/symbol tables** and how `esMODS_Install` consumes
-   them. `auto.mod` (decodes exactly) is the cleanest worked example to dissect.
-2. **Hello-world module that loads** — the real proof. Injection is already
-   solved at the **resource level**: emit the raw PIC image, place it at an
-   unused `d:\mod\` slot (e.g. `oak.mod`) with the repacker, and stock `init.axf`
-   loads it at boot — no code patch. Converges with the
+1. **RE the module format + loader ABI. ✅ Done (2026-11-24).** Allwinner's
+   public D1s Melis SDK documents it, and every claim was verified against the
+   stock image: modules are fixed-address RISC-V ELF sections with an `ePDK.mod`
+   descriptor (`MInit..MIoctrl`); no relocations, no signature; kernel calls are
+   `ecall` with the SDK's numbering. Full spec in
+   [format-minfs.md](format-minfs.md#what-a-module-is-fixed-address-code--a-descriptor);
+   `headunit decompress --elf` unpacks all 63 stock modules exactly.
+2. **Hello-world module that loads**: the real proof. Build with
+   `riscv64-elf-gcc`, link at `0xe0000000 + type × 1 MiB` (test type `0x75`, unused
+   by every stock module), and load it with **one line in `/startup.sh`** (see
+   injection below). It prints over the UART. Converges with the
    [HAL-explorer probe](boot-and-recovery.md#hardware-probing--hal-access-talk-to-the-board-directly):
    the first module you load is naturally a diagnostic REPL.
 3. **Host + embedded Lua** — the VM, the sandbox, the API bindings.
@@ -191,37 +194,35 @@ loaded.** Ordered:
 
 ## Open research questions
 
-- **Module binary format — answered: raw PIC RISC-V image, no magic header.**
-  With the toolkit's decompressor (`headunit decompress`), `auto.mod` decodes
-  exactly: it opens directly with position-independent code (`auipc a5,…; addi;
-  …; ret`), not a container header. (The `MAGIC`/`VERSION`/`MOD_` tokens were a
-  red herring — OpenSSL strings statically linked into `auto.mod`.) There's **no
-  ELF, no RT-Thread/`dlmodule`, no magic/signature gate** — the loader just maps
-  the blob and calls in. Remaining RE: map the **trailer tables** (likely
-  relocation/symbol) and what `esMODS_Install` consumes, so we can *emit* a valid
-  module. Toolchain target: **Melis 4.x-release-1.2**, framework
-  `livedesk/beetles` (from a build-path leak).
-- **Module injection — answered, and better than hoped: resource-level.** The
-  loader walks a **fixed list of 13 `d:\mod\*.mod` slots**, but only 3 ship
-  (`auto`, `carplay`, `cedar`). The other **10 are referenced-but-absent**
-  (`oak`, `pace`, `miracast`, `wireless`, `update`, `carlife`, `eclink`,
-  `sensor_play`, `vcoder`, `video_play`) — the app tries each, logs "no X.mod",
-  and continues. So **placing our host module at an unused slot via the MINFS
-  repacker gets it loaded at boot with NO `init.axf` patch** — a pure resource
-  edit, from internal `d:` storage. Caveat: the app may call that slot's expected
-  entry points for its nominal feature, so the host must satisfy or safely no-op
-  that interface (bench-test which slot is quietest; `oak`/`pace` are unknown and
-  likely dormant). This collapses milestone 2's "very hard" path to "hard".
-- **Is the module-load list data-driven or hardcoded?** If the stock app loads
-  its modules from a manifest/config of paths (like `d:\mod\cedar.mod`), we might
-  register our host as a **pure resource edit** — no `init.axf` patch. If the
-  list is hardcoded, injection needs a code patch. This single question is the
-  difference between "hard" and "very hard" for milestone 2.
-- **Host injection — largely answered:** drop the host at an unused `d:\mod\`
-  slot (above); stock `init.axf`, UI, and CarPlay stay intact and the app loads
-  our module itself. No code patch, no re-hosting. Open sub-question: which slot
-  the app installs but then leaves alone (so it doesn't call an interface we must
-  emulate) — a bench test.
+- **Module binary format: answered** (milestone 1 above). The earlier "raw PIC
+  image + trailer tables" reading was a decoder artifact; see the correction note
+  in [format-minfs.md](format-minfs.md#modules-are-stored-as-elf-sections).
+  Toolchain target: **Melis 4.x-release-1.2**, framework `livedesk/beetles`.
+- **Module injection: answered, via `/startup.sh`.** The data partition ships a
+  boot script that the kernel shell runs (`msh_exec_script`, per the SDK):
+
+  ```
+  #insmod d:\mod\display.mod
+  #insmod d:\mod\orange.mod
+  insmod d:\apps\desktop.mod
+  ```
+
+  `insmod` = `esMODS_MInstall` + `esMODS_MOpen`, so the load list is **data-driven**.
+  Adding one `insmod` line is a plain text edit the repacker already supports.
+  The host then needs only `MInit`/`MOpen`, with no app-facing slot interface to
+  emulate. Two places the module file can live:
+  - **In MINFS** (e.g. `d:\mod\luahost.mod`): needs a new "add file" feature in the
+    repacker (dentry-area growth); reflash to update the host.
+  - **On removable media** (e.g. `e:\luahost.mod`): the SDK loader falls back to
+    parsing a **plain ELF** from any path when the file isn't MINFS-packed. It reads
+    **ELF32-layout** headers, so we'd emit that layout around RV64 code. Updating
+    the host is then a file copy. Open: whether the vendor's compiled loader
+    matches the SDK here, and whether the SD/USB is mounted when `startup.sh` runs
+    (bench test).
+- **Fallback: the absent `d:\mod\` slots.** Of the 13 slots `init.axf` tries, 8
+  ship and 5 are absent (`oak`, `pace`, `miracast`, `carlife`, `eclink`). (An earlier
+  parser bug hid half of `/mod/`, so older notes said 10 were absent.) Using a slot
+  means satisfying whatever the app calls on it, so `startup.sh` is preferred.
 - **Audio/mic ownership** — can the host share the codec/mic with the call and
   CarPlay subsystems, or only when they're idle?
 

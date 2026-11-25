@@ -74,7 +74,7 @@ headunit list   stock/LTTF133.img                 # show sub-partitions
 headunit ls     stock/LTTF133.img                 # browse the MINFS tree
 headunit cat    stock/LTTF133.img Radio.txt --out radio.txt
 headunit screen stock/LTTF133.img RadioRds.data   # decode a UI screen
-headunit decompress stock/LTTF133.img init.axf --out init.bin  # unpack a LZMA payload
+headunit decompress stock/LTTF133.img /apps/init.axf --elf --out init.elf  # unpack a module for Ghidra
 headunit logo   stock/LTTF133.img my.png build/    # build a custom-splash image
 headunit wallpaper stock/LTTF133.img all my.jpg --out build  # swap home wallpaper(s)
 headunit fix-strings stock/LTTF133.img --out build # curated menu-typo fixes

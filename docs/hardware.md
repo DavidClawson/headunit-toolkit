@@ -17,11 +17,15 @@ bench unit, it says so.
 - **Loadable modules:** the app pulls native code at runtime via the `esMODS_*`
   loader from a **fixed list of `d:\mod\*.mod` slots** (13 named: auto, carplay,
   cedar, carlife, eclink, miracast, oak, pace, sensor_play, update, vcoder,
-  video_play, wireless). Only 3 ship in the image (`auto`, `carplay`, `cedar`);
-  the rest are absent and skipped gracefully. Modules are **raw
-  position-independent RISC-V images** (no ELF/magic header — see
+  video_play, wireless). **8 ship** in `/mod/` (`auto`, `carplay`, `cedar`,
+  `sensor_play`, `update`, `vcoder`, `video_play`, `wireless`, alongside
+  `display`, `mixture`, `ginkgo`, `slib`, `charset`, and the `willow/` image
+  decoders). **5 are absent** and skipped gracefully: `oak`, `pace`, `miracast`,
+  `carlife`, `eclink`. (An earlier parser bug hid half of `/mod/`; corrected
+  2026-11-24.) Modules are **fixed-address RISC-V ELF sections** stored per
+  section in MINFS, with an `ePDK.mod` descriptor (see
   [format-minfs.md](format-minfs.md)); `auto.mod` even statically links OpenSSL.
-  The unused slots are a resource-level injection surface — see
+  The absent slots are a resource-level injection surface. See
   [lua-host.md](lua-host.md).
 - **App:** one stripped RISC-V binary, `init.axf` (2,081,328 bytes; three
   concatenated raw-LZMA1 blocks inside MINFS — see
@@ -100,7 +104,7 @@ tuner fitted actually decoding RDS, and (c) for track text, surfacing the
 control. See [format-datav1.md](format-datav1.md).
 
 **RadioText is a strong resource-only candidate — both static halves confirmed.**
-`ViewShowStrRdsRt` is referenced *by name* inside `init.axf` (offset 1450828,
+`ViewShowStrRdsRt` is referenced *by name* inside `init.axf` (vaddr `0xe9262348`,
 directly between `ViewShowStrRdsPs` — which renders fine when placed — and
 `ViewShowStrRdsEn`), and its screen `RadioRds.data` *is* shipped. These apps
 update controls by name ("find control X on the active screen, set its text"), so

@@ -60,7 +60,7 @@ config in `sys_config_nor.fex`: `lcd_x=720`, `lcd_y=1280`), so x can run to
 - `ViewShowStrRdsPs` (station name) exists on the RDS sub-screen.
 - `ViewShowStrRdsRt` (RadioText = song/artist) is **referenced by the app binary
   but placed on no screen**. Confirmed by cross-reference (below): the name sits
-  in `init.axf` at offset 1450828, directly between `ViewShowStrRdsPs` and
+  in `init.axf` at vaddr `0xe9262348`, directly between `ViewShowStrRdsPs` and
   `ViewShowStrRdsEn` — and `RadioRds.data` is shipped. So RadioText is a
   **missing field on an existing screen**, the cheapest class of mod.
 
@@ -152,7 +152,7 @@ X" idea is: *does the app already reference that control name?*
 
 **Worked case — RadioText (`ViewShowStrRdsRt`, song/artist):** both halves of
 the "resource-only?" test now check out from static analysis — the name *is*
-referenced in `init.axf` (offset 1450828, between `ViewShowStrRdsPs`, which
+referenced in `init.axf` (vaddr `0xe9262348`, between `ViewShowStrRdsPs`, which
 renders fine when placed, and `ViewShowStrRdsEn`), and its screen `RadioRds.data`
 *is* shipped. So this is a **missing field on an existing screen** — the most
 optimistic case, plausibly pure resource. `scripts/experiment_rds_radiotext.py`

@@ -6,11 +6,22 @@ tree. All fields little-endian.
 
 ## Superblock
 
-Starts with ASCII `MINFS`. Rather than depend on the exact superblock layout
-(which varies by version), the reader locates the root directory empirically:
-it scans the region just after the superblock for the first record with sane
-lengths and a printable name, then walks the tree from there. This has been
-robust across the images seen.
+Starts with ASCII `MINFS`. The 512-byte header (`__minfs_hdr_t` in the SDK):
+
+| off | type | field | stock `data_udisk.fex` |
+|----:|------|-------|------|
+| +0x00 | char[6] | magic `MINFS\0` | |
+| +0x06 | u16 | version | `0x100` |
+| +0x08 | u32 | root dir offset | 512 |
+| +0x0c | u32 | root dir size | 164 |
+| +0x10 | u32 | total dentry count | 174 |
+| +0x14 | u32 | total dentry bytes | 16360 |
+| +0x18 | u32 | file data area size | 12490476 |
+| +0x1c | u32 | image size | 14614528 |
+
+The reader still locates the root directory by scanning (it predates knowing
+this header). Adding a *new* file means growing the dentry area and updating
+these counts, which is why the repacker can only replace files so far.
 
 ## Directory entry
 
@@ -20,54 +31,95 @@ robust across the images seen.
 | +0x04 | u32 | stored length (compressed size; equals original if not compressed) |
 | +0x08 | u32 | original length |
 | +0x0c | u16 | record length (whole entry incl. name) |
-| +0x0e | u16 | attributes (bit 0 set → directory) |
+| +0x0e | u16 | attributes: bit0 directory, bit1 **module**, bit2 compressed |
 | +0x10 | u16 | name length |
-| +0x12 | u16 | (reserved) |
-| +0x14 | char[name_len] | name (ASCII) |
+| +0x12 | u16 | **extent length** (bytes of section headers after the name; modules only) |
+| +0x14 | char[name_len] | name (ASCII), padded to 4 bytes, then the extent |
 
 Directory records are laid out back-to-back inside the parent's data region;
-a zero record length ends the list. Some payloads are LZMA-compressed in place
-(`stored < original`, e.g. `init.axf`, `carplay.mod`, `cedar/*.drv`). Note that
-for a compressed file `length` is the *decompressed* size, so a raw `read()`
-returns `length` bytes and over-reads past the `stored_len` on disk; the repacker
-refuses compressed targets for this reason. To get the real bytes, use the
-decompressor: `headunit decompress <img> <path> --out <file>`, or
-`headunit.decompress_node(mfs, path)` (reads `offset..offset+stored_len` and
-decodes). It reproduces `init.axf` and `auto.mod` **exactly**; `carplay.mod`,
-`cedar/vdecoder.drv`, and the tiny `cedar/*.plg` come back short/partial (a false
-magic inside compressed data, or a small-plugin framing variant) and are returned
-with a `complete=False` flag rather than silently trusted — cracking those fully
-is the remaining TODO.
+a zero record length ends the list. (Field names follow Allwinner's
+`__minfs_dentry_t` in the public D1s Melis SDK, `ekernel/filesystem/fs/minfs/minfs.h`.)
+In the stock image, plain files are `attr=0` and never compressed; directories
+are `attr=1`; and every executable (`init.axf`, `*.mod`, `*.drv`, `*.plg` — 41
+files) is `attr=6` (module + compressed). Nothing else is compressed.
 
-**What's inside the packed payloads:** **not ELF, and not a container with a
-file-header magic.** `init.axf` and the `.mod`/`.drv` modules are **raw
-position-independent RISC-V code+data images** — they open directly with PIC
-code (`auipc a5, imm; addi a5, a5, imm; … ; ret` — so the leading `97 ?? 0? 00`
-bytes are an `auipc` instruction, not a magic number), with the data/string
-section following and trailer tables (likely relocation/symbol) at the end. The
-loader (`esMODS_*`) maps the blob and calls into it; there is no ELF header to
-parse.
+### Modules are stored as ELF sections
 
-> Earlier note corrected: the `MAGIC`/`VERSION`/`MOD_` tokens first spotted in
-> `auto.mod` are **OpenSSL** strings (`RC2_MAGIC_TO_METH`, `TLS_MAX_VERSION`,
-> `RSA_NULL_MOD_EXP`) — `auto.mod` statically links OpenSSL for Android Auto's
-> TLS — *not* a module header. A build-path leak inside it even names the
-> toolchain: `melis-4.x-release-1.2 … livedesk/beetles/CarApp`.
+A module isn't stored as one blob. The build links an ordinary RISC-V ELF and
+the packer keeps only its sections. The dentry's extent is an array of 32-byte
+section headers (`__minfs_section_hdr_t`):
 
-Emitting a home-grown loadable module ([lua-host.md](lua-host.md)) therefore
-means producing this raw PIC image in whatever layout `esMODS_Install` expects
-(trailer tables still to be mapped) — there's no off-the-shelf ELF toolchain for
-it, but also no magic/signature gate.
+| Offset | Type | Field |
+|---|---|---|
+| +0x00 | u32 | offset of this section's record, relative to the file's data offset |
+| +0x04 | u32 | record size as stored (compressed size if LZMA) |
+| +0x08 | u32 | record size once unpacked |
+| +0x0c | u32 | section size in memory |
+| +0x10 | u32 | load address (vaddr) |
+| +0x14 | u32 | ELF `sh_type` (1 PROGBITS, 8 NOBITS/bss) |
+| +0x18 | u32 | ELF `sh_flags` (1 WRITE, 2 ALLOC, 4 EXEC) |
+| +0x1c | u32 | attr: bit0 **magic section**, bit1 **LZMA-compressed** |
 
-> **`init.axf` is not a single LZMA stream.** It's **three concatenated raw
-> LZMA1 blocks**, each a 5-byte header `5d 00 80 00 00` (props `0x5d` →
-> lc=3,lp=0,pb=2; dict `0x8000`) followed by the stream with **no 8-byte
-> uncompressed-size field** (omitted, not zeroed). In the stock image the magics
-> sit at stored offsets `0 / 798684 / 944608`. Decode each `block[5:]` with
-> Python `lzma.decompress(..., format=lzma.FORMAT_RAW, filters=[{"id":
-> lzma.FILTER_LZMA1, "dict_size": 1<<26}])` and concatenate → exactly 2,081,328
-> bytes. The older "single stream, splice `ff`×8 as the size" recipe fails on
-> this file. (The Melis `.mod`/`.drv` modules *are* single LZMA_ALONE streams.)
+Each compressed section is an **independent** LZMA record: 5 bytes of LZMA
+properties (`5d 00 80 00 00` in practice → lc=3 lp=0 pb=2, dict 32 KiB), then raw
+LZMA1 data with no size field and no end marker. The unpacked size comes from the
+header. bss sections store nothing. A typical module:
+
+```
+init.axf   0xe9100000  .text    1358556 B  lzma
+           0xe924badc  .rodata   479468 B  lzma
+           0xe92c0bc8  .data     242904 B  lzma
+           0xe92fc0a0  .bss      104776 B
+           0xffff0000  magic         80 B  raw   ("ePDK.mod" descriptor)
+```
+
+**All 170 sections across all 41 modules decode to exactly their declared size.**
+`headunit decompress <img> <path> --out <file>` writes the flat memory image
+(lowest vaddr to the end of the last PROGBITS section; the sections are
+contiguous in every stock module). `--elf` writes an ELF with each section at
+its real address, so Ghidra/objdump need no manual base. In Python:
+`headunit.decompress_node(mfs, path)`, then `headunit.module_to_elf(decoded)`.
+
+> **Correction (2026-11-24).** The earlier decoder split the stored bytes on the
+> `5d 00 80 00 00` magic and decoded each piece with an open-ended output length.
+> That read a few bytes past each section's end. For `init.axf` its output was
+> shifted **+4 bytes** from the start of `.rodata` on (so `ViewShowStrRdsRt` is at
+> image offset **1450824**, vaddr `0xe9262348`, not 1450828), and its `.data`
+> section was garbled by a false magic match. Its "exact" length match was a
+> coincidence of the dentry's `original_len` (which counts the magic record plus
+> header padding). The "trailer / symbol-table tails" and the `charset.mod`
+> "header variant" described in earlier notes were just the next section's
+> bytes. Use addresses, not old offsets, when citing locations.
+
+### What a module is: fixed-address code + a descriptor
+
+- **Not PIC.** A system module is linked at, and loaded at,
+  `0xe0000000 + type × 1 MiB` (`EPOS_smod_startaddr + id × EPOS_smod_segsize`).
+  Stock examples: `carplay.mod` type `0x88` → `0xe8800000`, `auto.mod` `0x89`,
+  `init.axf` `0x91`, `cedar.mod` `0x94`, the Cedar codecs `0x4c..0x5f`/`0x96`.
+  Two modules may share a type only if they are never installed at the same time
+  (e.g. the `adec_*.drv` codecs are all `0x52`).
+- **The magic section** (vaddr `0xffff0000`, 80 bytes) is the
+  `__module_mgsec_t` descriptor: `char magic[8] = "ePDK.mod"`, `u32 version
+  (0x01000000)`, `u8 type`, `u32 heapaddr (0xF0000)`, `u32 heapsize (0x400)`, then
+  the `__mif_t` table of seven 64-bit function pointers `MInit, MExit, MOpen,
+  MClose, MRead, MWrite, MIoctrl`. Every stock module uses these exact template
+  values.
+- **Loading** (`esMODS_MInstall` → `LDR_*` → the MINFS `ROMLDR_IOC_*` ioctls):
+  find the magic section, take the type, map each ALLOC PROGBITS/NOBITS section at
+  its vaddr, copy/decompress its data, zero bss, then call `MInit`. **There's no
+  relocation table, no symbol table, and no signature.**
+- **Kernel calls** are `ecall` with `a7 = 0x10000000 | (group << 8) | slot`, using
+  the SDK's `SWIHandler_*_t` tables in `kapi.h` (the `CONFIG_KERNEL_USE_SBI`
+  branch). Mapping every `ecall` in the stock `init.axf`/`auto.mod`/`carplay.mod`/
+  `cedar.mod` through those tables gives coherent names (`esFSYS_fopen/fread/
+  fseek/mkdir/remove`, `esCFG_GetKeyValue`, `esKRNL_TCreate`, `esMODS_*`,
+  `esMSTUB_*`), so the public SDK's numbering matches this firmware.
+
+> The `MAGIC`/`VERSION`/`MOD_` tokens first spotted in `auto.mod` are **OpenSSL**
+> strings (`RC2_MAGIC_TO_METH`, `TLS_MAX_VERSION`, `RSA_NULL_MOD_EXP`);
+> `auto.mod` statically links OpenSSL for Android Auto's TLS. A build-path leak
+> inside it names the toolchain: `melis-4.x-release-1.2 … livedesk/beetles/CarApp`.
 
 ## Partition checksum (the only integrity check)
 
@@ -107,8 +159,9 @@ the exact same total size**, so it still drops straight into the IMAGEWTY slot:
 
 Constraints: targets must be **uncompressed** (`stored_len == original_len`) —
 growing an LZMA file would need recompression — and total growth must fit the
-free arena. Aliased paths that share one entry (e.g. `/Setup.txt` and
-`/Language/Setup.txt`) are deduplicated and updated once.
+free arena. Modules are refused outright (they're stored as sections). Two
+spellings of one file (legacy `/Setup.txt` and the true
+`/apps/Language/Setup.txt`) are deduplicated and updated once.
 
 ```python
 from headunit import MinFS, write_partition
