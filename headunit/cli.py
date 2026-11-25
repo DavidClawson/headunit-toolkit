@@ -53,19 +53,29 @@ def cmd_cat(args):
 
 
 def cmd_decompress(args):
+    from .decompress import module_to_elf
     img = _load_img(args.image)
     fs = MinFS(img.read(args.partition))
     d = decompress_node(fs, args.path)
-    status = "complete" if d.complete else f"PARTIAL ({d.error or 'short'})"
-    print(f"{args.path}: {d.blocks} LZMA block(s), "
-          f"{d.original_len} bytes expected, {len(d.data)} recovered — {status}",
-          file=sys.stderr)
+    status = "complete" if d.complete else f"PARTIAL ({d.error})"
+    print(f"{args.path}: {d.blocks} section(s), {len(d.data)}-byte image "
+          f"@ {d.base:#x} — {status}", file=sys.stderr)
+    for s, body in d.sections:
+        kind = "magic" if s.is_magic else "bss" if s.is_bss else (
+            "lzma" if s.compressed else "raw")
+        print(f"  {s.vaddr:#010x}  size {s.size:<8} flags {s.flags:#x}  {kind}",
+              file=sys.stderr)
+    if d.descriptor:
+        m = d.descriptor
+        print(f"  module type {m.type:#04x}, MInit {m.mif['MInit']:#x}",
+              file=sys.stderr)
+    out = module_to_elf(d) if args.elf else d.data
     if args.out:
         with open(args.out, "wb") as fh:
-            fh.write(d.data)
-        print(f"wrote {len(d.data)} bytes to {args.out}", file=sys.stderr)
+            fh.write(out)
+        print(f"wrote {len(out)} bytes to {args.out}", file=sys.stderr)
     else:
-        sys.stdout.buffer.write(d.data)
+        sys.stdout.buffer.write(out)
 
 
 def cmd_screen(args):
@@ -239,11 +249,13 @@ def main(argv=None):
     s.set_defaults(func=cmd_cat)
 
     s = sub.add_parser("decompress",
-                       help="decompress a LZMA-packed MINFS payload (init.axf, *.mod/.drv/.plg)")
+                       help="unpack a Melis module (init.axf, *.mod/.drv/.plg) to a memory image or ELF")
     s.add_argument("image")
     s.add_argument("path", help="MINFS path, e.g. init.axf or /auto.mod")
     s.add_argument("--partition", default="data_udisk.fex")
     s.add_argument("--out", help="write to file (else stdout)")
+    s.add_argument("--elf", action="store_true",
+                   help="emit an ELF with every section at its load address (for Ghidra/objdump)")
     s.set_defaults(func=cmd_decompress)
 
     s = sub.add_parser("screen", help="decode a DATAV1.0 screen layout")
