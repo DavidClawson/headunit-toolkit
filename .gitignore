@@ -28,3 +28,6 @@ dist/
 .env
 .env.*
 *.env
+
+# repo pulse analytics log (local only)
+/docs/analytics/
