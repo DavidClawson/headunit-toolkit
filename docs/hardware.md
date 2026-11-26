@@ -72,9 +72,9 @@ pin wiring directly — no probing needed to find the ports:
 - **JTAG:** present on PE4… but disabled (`jtag_enable=0`).
 
 Caveat: PB06 is listed both as `uart_debug_tx` and `usbc0`'s `usb_id_gpio` (a
-reused-template artifact); the debug UART takes it in practice. Full tiering of
-how to use these — FEL, UART, custom app — is in
-[boot-and-recovery.md](boot-and-recovery.md#hardware-probing--hal-access-talk-to-the-board-directly).
+reused-template artifact); the debug UART takes it in practice. Where these pins
+are physically (F133 pins 80/79), and the SPI-clip recovery procedure, are in
+[boot-and-recovery.md](boot-and-recovery.md#the-debug-uart-located-not-yet-wired).
 
 ## Display / touch
 

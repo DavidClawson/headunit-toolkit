@@ -6,6 +6,31 @@ it's reverse-engineering facts and test results from a unit we own.
 
 ---
 
+## 2026-11-25 — hello.mod bricked the bench unit; recovered with a SPI clip
+
+- **What happened:** the first `hostmod` test image (`hello.mod` in the
+  `/mod/willow/readme.txt` slot, plus an `insmod` line in `/startup.sh`) flashed
+  fine, then the unit hung at the boot splash on every power-up. Reflashing the
+  stock image from a USB stick did nothing: the updater lives in the app, which
+  never started. Cause still unknown (no serial log).
+- **No SD slot.** The manual shows one, but this W022 has none fitted, so card
+  recovery (PhoenixCard) was out. No labelled UART/FEL pads either.
+- **Recovered** with a SOIC-8 clip on the XMC XM25QH128D flash and a Pico
+  running `pico-serprog` with `flashrom` on the Mac. Two identical 16 MB reads,
+  then the data partition was replaced with stock (only 3 × 4 KB blocks differed).
+  A partition-only write verified and the unit booted normally.
+  Full procedure: [boot-and-recovery.md](boot-and-recovery.md).
+- **Debug UART located:** PB6/PB7 = F133 pins 80/79, the 17th/18th legs from
+  the left on the top edge; the core-supply leg next to them (0.926 V) confirmed
+  the orientation. A hand-soldering attempt bridged four legs (unit unpowered,
+  to be cleaned up). Lesson: don't solder at 0.4 mm pitch without the right
+  tools; probe with a needle, find a via, or use a repair shop.
+- **Lessons:** back up the flash *before* running native code; never put
+  untested code in the boot path without a skip switch; emulator passing ≠
+  hardware passing.
+
+---
+
 ## 2026-11-24 — First bench session: pipeline + two mod lanes validated on hardware
 
 Unit: a second **W022** (badge **JOY-W022**), no speakers, driven entirely by

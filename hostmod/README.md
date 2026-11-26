@@ -4,10 +4,12 @@ Build your own Melis kernel modules and have the stock firmware load them at
 boot, with no `init.axf` patch and CarPlay/Android Auto left untouched. This is
 milestone 2 of the [Lua host](../docs/lua-host.md); `hello/` is the first module.
 
-> **Status: built and emulator-tested; not yet run on hardware.** Every step
-> below was checked against the stock firmware (see "Why this works"), and
-> `scripts/emulate_module.py` runs the packed module through its whole
-> lifecycle. The first real boot is the bench test at the bottom.
+> **Status: the first hardware test hung the bench unit at the boot splash**
+> (2026-11-24). It was recovered by rewriting the SPI flash with a clip
+> ([boot-and-recovery.md](../docs/boot-and-recovery.md)). The cause is not yet
+> known. **Don't install a module into `startup.sh` again** until we have a boot
+> log (debug UART) and a way to skip the module at boot. The emulator passing
+> did not predict this.
 
 ## Build
 
@@ -93,11 +95,10 @@ Reading the result:
 |---|---|
 | `HELLO.TXT` present | Module loaded, `MInit`/`MOpen` ran, its thread ran with kernel file I/O. Milestone 2 done. |
 | Boots normally, no file | Load failed gracefully, or the stick isn't `F:`–`K:`. A UART log says which (`install fail` vs our banner). |
-| Doesn't boot / hangs | Reflash `stock/`. If USB updating no longer works, use FEL or SD-card recovery ([boot-and-recovery.md](../docs/boot-and-recovery.md)). |
+| Doesn't boot / hangs | **What actually happened.** A stick can't fix it: the USB updater is in the app, which never starts. Recover with the SPI flash clip ([boot-and-recovery.md](../docs/boot-and-recovery.md)). |
 
-**Risk:** low but not zero. The module does almost nothing, and a failed load
-prints an error and lets `startup.sh` carry on. But this is the first time our
-own code runs in the kernel's address space. A crash at boot could stop the app
-from starting. Whether USB updating still works in that state is unknown, and
-FEL/SD recovery haven't been validated on this unit yet. Use the **bench unit**,
-not the car.
+**Risk: high without a flash backup.** This test hung the bench unit at the
+splash, and neither reflashing from a USB stick nor any other software path
+brought it back. Only rewriting the SPI flash chip did. Before any boot-path
+test: back up the chip with the clip, keep the case open with the clip at hand,
+and use the **bench unit only**, never the car.
