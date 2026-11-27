@@ -77,6 +77,28 @@ When an update is in progress the receive path switches to `0xe91bba46`
 then frames are `AA 55 TYPE(1-3) + 12 bytes`, with firmware sent in 512-byte
 blocks. The pre-dispatch hook `0xe91bb9bc` routes `81/C5`, `80/C4`, `80/C6` to it.
 
+## Start-up handshake (verified on the bench, 2026-11-26)
+
+Sending `A0` (`02 80 A0 00 20`, `tools/fel/mcu.py send A0`) from FEL makes the
+MCU answer within 15 ms:
+
+| Frame | Content |
+|---|---|
+| `80 A0 01 00` | acknowledges `A0`, status 0 |
+| `81 DB 01 01` | ? |
+| `81 C3` (20 bytes) | ASCII `AB5301_20260106_2125`: **MCU firmware; the "MCU" is a Bluetrum AB5301** (the LQFP48 "AB" chip) |
+| `81 A6 09 00 04 00…` | ? |
+| `81 BF 05` | ASCII `LTT-H` |
+| `81 D4` × 6 | BT status lines: `IS`, `II`, `MMCAR BT` (device name), `MN0000` (likely PIN), `MZ414288002B52` (likely BT address), `IA` |
+| `81 B2 … FE 00 00 05 00` | key frame with code `FE` |
+| `81 B9 07 03 00…` | ? |
+| `81 B2 00 CE` every 3 s | heartbeat |
+
+**Unanswered heartbeats seem to make the MCU reset the F133:** about 2.5 minutes
+after `A0`, with no replies, the unit reset (and booted stock through the FEL
+window). Before sending `A0`, FEL ran for long periods without resets. The reply
+the app sends is not yet identified (the app does send `B0` code `CE`).
+
 ## Front-panel keys (verified on the bench, 2026-11-26)
 
 The front-panel buttons are read by the **MCU**, not the F133: in FEL, the
@@ -96,13 +118,14 @@ The app's `B2` handler (`0xe918b43c`) maps `KK` through a jump table at
 | Knob clockwise | `04` | 65 (presumably volume up) |
 | Knob counter-clockwise | `05` | 66 (presumably volume down) |
 | Phone | `06` | special handler (call state check, `0xe91803ae`) |
-| Home | — | **nothing seen on UART1, UART4, LRADC or GPIO while in FEL** |
+| Home | — | **nothing seen anywhere**: not on UART1 (even after the `A0` handshake), UART4, LRADC, or any GPIO checked (ports B, D, E, G opened as inputs; PF0–PF6, PC0–PC1) |
 
 Other `KK` in the table (not on this panel, likely steering-wheel/IR paths):
 `02→64`, `03→67`, `07→365`, `08→71`, `09→17`, `0A→73`, `0C→101`, `1D→233`;
 `0x10`–`0x15` → `KK+112`. Codes `0x87`–`0x98` take a separate path. Holding a
-key sends nothing extra. Home may only be forwarded after the F133's start-up
-handshake with the MCU (FEL never sends one); unconfirmed.
+key sends nothing extra. How home reaches the app is still open: perhaps the MCU
+forwards it only after more of the app's init sequence than `A0`, or it is
+wired somewhere not yet checked.
 
 ## On the bench (FEL)
 

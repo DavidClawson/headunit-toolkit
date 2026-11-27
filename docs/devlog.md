@@ -15,6 +15,11 @@ it's reverse-engineering facts and test results from a unit we own.
   115200: knob push `01`, knob CW `04`, CCW `05`, phone `06`. Decoded the app's
   `KK` → key-ID table. Home produced nothing anywhere in FEL.
 - Touch didn't register in this session (GT911 answers on I2C); not chased.
+- **First transmit to the MCU:** `A0` from FEL got a full handshake back,
+  including its firmware string `AB5301_20260106_2125` (the MCU is a Bluetrum
+  AB5301) and BT status lines (name `MMCAR BT`). It then pings `B2 CE` every 3 s,
+  and ~2.5 min later the F133 was reset, apparently for not answering. Home
+  still sent nothing; also not on PF0–PF6 or PC0–PC1.
 - My mistake along the way: running two xfel tools at once makes both report
   "No FEL device found", which looked like the unit had reset. It hadn't.
 
