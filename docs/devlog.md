@@ -984,3 +984,28 @@ phone:
 link-local, advertises `_airplay._tcp` and connects to the phone's
 `_carplay-ctrl._tcp` (`docs/carplay-iap2.md` section 4). That's the start of
 the CarPlay session proper.
+
+**Where wired CarPlay stands (2026-11-27).** Every step below runs in our
+firmware (`tools/fel/dram/carplaytest.c`), on the bench unit, with a current
+iPhone:
+
+| Step | Status | Notes |
+|---|---|---|
+| USB-A host mode + 5 V | done | USB0, PD18 |
+| Role switch (`C0 53`, `40 51`) | done | phone drops off after ~70 ms |
+| Back as a device | done | needs a USBOTG0 CCU reset |
+| Stock's iAP + NCM gadget | done | configured at high speed |
+| iAP2 link (detect, SYN, ACK) | done | |
+| Authentication | done | MFi 3.0 chip on TWI2, `AA05` |
+| Identification | done | stock's layout, `1D02` accepted |
+| Power and time messages | done | `AE00`/`AE03` out, `4E0B` and `AE01` in |
+| NCM link | done | phone selects alt 1; DHCP and mDNS traffic |
+| Our side of the link | next | IPv6 ND, address, mDNS `_airplay._tcp` |
+| CarPlay control connection | todo | to the phone's `_carplay-ctrl._tcp` |
+| AirPlay/CarPlay session | todo | pairing, MFi-SAP, H.264 video, audio |
+
+The last two rows are where hosting stock's `carplay.mod` (the chosen
+direction, `docs/carplay-host.md`) or a large amount of our own code comes
+in. Everything above them is now ours and understood. It is also the part
+the module expects its host to provide: the USB gadget, the role switch, and
+the iAP2 and NCM transport (`MIoctrl` 13).
