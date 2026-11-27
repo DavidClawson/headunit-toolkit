@@ -600,3 +600,17 @@ the tuner's reset (active-low), as `radioResetGpio=105` says.
 - **Not yet checked:** whether the MCU start-up is needed at all (it may only
   matter for the MCU's own reasons), and whether RDS works. The Si4730 has no
   RDS; its sibling the Si4731 does.
+- **Kernel analysis confirms it** (static, `melis_pkg` kernel at 0x40000000):
+  - **Every `/dev/twiN` uses the software driver** (`init_twi_device` registers
+    twi0–4 with the sim ops). That includes `/dev/twi2` for the BD3702 and the
+    MFi chip.
+  - Only the touch driver uses the hardware TWI controller.
+  - **Pins come from `[twiN]` with the function forced to 0 (GPIO)** and pull-ups
+    on. The first entry is SCL, the second SDA.
+  - **SCL is push-pull with no clock stretching.** SDA is released only for ACK
+    and read phases.
+  - Default 100 kHz means a ~6 µs half-period, about 80 kHz in practice.
+  - **The kernel does nothing to power the tuner,** and the config has no
+    tuner pin besides the reset. So the tuner is likely always powered, and the
+    MCU start-up may not be needed for the radio (untested).
+  - `[twi_para]` is a bootloader setting the kernel never reads.
