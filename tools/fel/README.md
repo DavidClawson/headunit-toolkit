@@ -16,6 +16,9 @@ the first-contact kit; the background is in
 | `i2c.c` / `i2c.py` | I2C over FEL: SRAM payload + host tool. `scan`, `read`, `write`, `gt911-id`, `gt911-touch`. **Works** (2026-11-26). |
 | `edges.c` / `uart_sniff.py` | Logic-analyser-style UART listener: timestamps every edge on an RX pin (mcycle, 0.2 µs polls), then estimates baud and decodes 8N1 on the Mac. `calibrate`, `listen uart1|uart4`. |
 | `felrun.py`, `dram/` | DRAM programs: `felrun.py dram/<prog>.bin` sets up RAM (`xfel ddr f133`, once per power-up), loads at `0x40000000`, runs, prints the program's log. `dram/lib.h` has MMIO, `udelay`, `ticks()`, `logf()`. Programs: `memtest`, `clock`. |
+| `bootsel/` | **FEL window in boot0** (see below): `stub.S`, `mkboot0.py <nor-backup>` builds `boot0-felwin.bin`. |
+| `fel-catch.sh` | Waits for the boot0 FEL window, disarms the watchdog, keeps the unit in FEL. Start it, then power-cycle. |
+| `fel-boot-stock.sh` | From FEL, reset straight into the stock firmware (no power cycle). |
 | `clip-wait.sh` | Polls the SOIC clip until flashrom sees the chip, then chimes. For reseating a fiddly clip. |
 | `payload.ld` | Linker script for C payloads (entry at `0x40000`, request block at `0x40F00`). |
 | `Makefile` | `make` builds `probe.bin` (load address `0x40000`). |
@@ -166,6 +169,33 @@ was already at `0x5d` at power-on.
   `0x1400BFF8` hung FEL (needed a power-cycle). Probe unknown regions from
   your own payload instead.
 
+## FEL without the clip: the boot0 FEL window (2026-11-26)
+
+The bench unit's flash now holds **stock boot0 plus a 194-byte patch**
+(`tools/fel/bootsel`). Every power-up (or reset) opens a ~3 s FEL window:
+
+- `fel-catch.sh` running on the Mac: it disarms the watchdog, the unit stays in FEL.
+- Nothing catches it: the watchdog resets the chip, boot0 sees the "window
+  used" flag in RTC GP3 (`0x0709010C` = `0xFE1C0DE5`), clears it and boots stock
+  (adds ~4 s to boot).
+- `fel-boot-stock.sh`: sets that flag and resets, so FEL → stock without a power cycle.
+
+How it works:
+- boot0 asks `0x24d38` "jump to FEL?" once (stock answer: RTC GP2 ==
+  `0x5AA5A55A`, the `reboot efex` flag). That call (at `0x28c48`) is redirected
+  to the stub.
+- The boot ROM's FEL entry (`0x20`) **disarms the watchdog**
+  (BROM `0x8a`–`0x9a`). So boot0's final `jr 0x20` (at `0x28c66`) is redirected
+  to `fel_tramp`, which repeats BROM `0x22`–`0x86` and enters at `0x9e`.
+- The stub lives in boot0's random padding (`0x2b800`, past `.bss`
+  `0x2b4c8`–`0x2b5ec`); the eGON checksum is recomputed.
+- Verified: an uncaught window boots stock; a 12 V power cycle is caught;
+  memtest runs; `fel-boot-stock.sh` returns to the stock UI.
+
+**Restoring pure stock:** `xfel spinor write 0 <(head -c 49152 stock/nor/pre-fel-20261126-212912.bin)`
+from FEL, or the clip. **If a patched boot0 ever hangs before FEL, only the
+clip recovers it.**
+
 ## DRAM and the DRAM program kit (2026-11-26)
 
 - `xfel ddr f133` uses exactly the board's `[dram_para]` (all 24 fields match).
@@ -187,4 +217,4 @@ xfel's own helper code lives at `0x20000`–`0x32000` (DDR init, SPI) and
 `0x40000`–`0x40140`, clear of both. DRAM (`0x40000000`, 64 MB on the F133) is
 only usable after `xfel ddr f133`. DRAM programs: code from `0x40000000`, stack
 `0x43F00000`–`0x43FF0000`, log `0x43FF0000`. `felrun.py` keeps a "DRAM ready"
-marker at SRAM `0x44F80`.
+marker at SRAM `0x40FF0`. **Never write near `0x44FFC`: the boot ROM's FEL stack grows down from there** (writing `0x44F80` hung FEL).

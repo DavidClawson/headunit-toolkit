@@ -6,6 +6,25 @@ it's reverse-engineering facts and test results from a unit we own.
 
 ---
 
+## 2026-11-26 (late) — FEL without the clip: a watchdog-guarded window in boot0
+
+- **Stock boot0 already has a "jump to FEL" path** (RTC GP2 = `0x5AA5A55A`,
+  set by the Melis debug-shell `reboot efex`), but nothing reachable sets it.
+- **Patch:** a 194-byte stub in boot0's padding makes every boot enter FEL with
+  the watchdog armed (3 s) and an RTC GP3 "window used" flag set. If the Mac
+  (`fel-catch.sh`) disarms it, the unit stays in FEL; otherwise the reset
+  boots stock. Written over USB with `xfel spinor write`, verified by readback.
+- **Snag 1:** the boot ROM's FEL entry disarms the watchdog itself, so the
+  first version sat in FEL forever. Fix: enter the boot ROM just past that
+  write, after repeating its CPU setup.
+- **Snag 2 (my bug):** felrun's "DRAM ready" marker at `0x44F80` sat inside the
+  boot ROM's FEL stack (top `0x44FFC`) and hung FEL twice. Moved to `0x40FF0`.
+- **Verified:** uncaught window → stock UI; 12 V power cycle → caught; DRAM
+  memtest 0 errors; `fel-boot-stock.sh` → stock UI without a power cycle.
+- Seen again: `mcycle`'s upper word jumping (5.9 GHz "rate" in `clock`).
+
+---
+
 ## 2026-11-26 (evening) — DRAM up over FEL; a C program kit with FEL as the console
 
 - **Debug UART is a dead end on this board:** PB6/PB7 (legs 17/18) appear to

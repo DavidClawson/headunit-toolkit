@@ -322,6 +322,10 @@ What this gives:
 3a. **DRAM over FEL: done** (2026-11-26). `xfel ddr f133` with the board's own
    parameters, 62 MB memtest clean, CPU at 1008 MHz afterwards; C programs run
    from DRAM via `tools/fel/felrun.py`.
+3b. **Boot selector: done** (2026-11-26), as a patch to stock boot0 rather
+   than a new loader: every boot opens a 3 s, watchdog-guarded FEL window
+   that `tools/fel/fel-catch.sh` can hold open; otherwise stock boots. The clip
+   is now only the backstop. Details: `tools/fel/README.md`.
 4. **Clean stock → new firmware tests** once the above is proven on the bench.
 
 ## Other board notes (bench unit, opened 2026-11-24)

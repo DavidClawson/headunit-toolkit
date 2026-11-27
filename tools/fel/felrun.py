@@ -13,7 +13,7 @@ import argparse, os, struct, subprocess, sys, tempfile, time
 
 XFEL = os.environ.get("XFEL", os.path.expanduser("~/src/xfel/xfel"))
 LOAD, LOG = 0x40000000, 0x43FF0000
-MARK, MARK_VAL = 0x44F80, 0xD0D0F133
+MARK, MARK_VAL = 0x40FF0, 0xD0D0F133   # NOT near 0x44FFC: that is the BROM FEL stack
 
 
 def xfel(*args, check=True):
