@@ -788,3 +788,33 @@ program into the boot firmware (`tools/fel/dram/tuner.c`, `radio_ui.c`):
   `tools/fel/felrun.py doom/doom.bin --load 0x43800000:doom/doom1.wad --timeout 3600`
 - **To consider:** turning the D-cache on in the head-unit app too. The UI
   draws with the cache off today (a full home screen took 44 ms).
+
+**USB device mode from our own code (2026-11-27).** `tools/fel/dram/musb.c`
+is a polled driver for USB0's MUSB controller in device mode. It handles
+endpoint 0 (standard requests, plus a class hook) and bulk/interrupt
+endpoints. Register offsets follow Allwinner's remapping (Linux
+`drivers/usb/musb/sunxi.c`, used as a reference).
+
+`usbtest.c` takes over the port from the boot ROM's FEL device and comes back
+as a **CDC-ACM serial port**. On the Mac it shows up as
+`/dev/cu.usbmodemF133_00011` ("Head Unit serial (USB test)", `1209:0001`, the
+pid.codes test ID) **at high speed**, 1.2 s after the takeover. It sends a line
+every second and echoes what the Mac sends. Run it with
+`felrun.py dram/usbtest.bin --usb-serial 30`.
+
+- **The trap: the boot ROM drives FEL's USB with interrupts and leaves them
+  on.** At first its own handler answered the host. The Mac saw a nameless
+  device (the boot ROM re-enumerating as FEL), our counters stayed at
+  0 resets / 0 setups, and the screen went white. With our own `mtvec`, the
+  first USB interrupt landed in our crash screen as mcause `0x8000…000B`
+  (machine external interrupt).
+  Fix: `csrci mstatus, MIE` and `mie = 0` before taking over. Anything that
+  takes over a boot-ROM peripheral under FEL needs this.
+- **No clock or PHY set-up was needed under FEL:** the boot ROM leaves USB0
+  powered, clocked and routed to the MUSB. For NOR boot, the PHY and clocks
+  will need setting up ourselves.
+- **Debugging aids kept in `usbtest.c`:** live enumeration stats on screen,
+  the last 6 SETUP packets in hex, and a red crash screen showing mcause, mepc
+  and mtval.
+- **Next:** CDC-NCM, so the Mac gets a network interface to the unit. That's
+  the transport CarPlay runs over, testable without an iPhone.
