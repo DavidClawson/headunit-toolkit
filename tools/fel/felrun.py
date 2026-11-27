@@ -32,6 +32,8 @@ def main():
     p.add_argument("--usb-serial", type=float, metavar="SECONDS",
                    help="the program takes over USB as a serial port (dram/usbtest.c): talk to it "
                         "for SECONDS instead of reading the log over FEL (FEL is gone afterwards)")
+    p.add_argument("--detach", action="store_true",
+                   help="start the program and exit (it takes over USB; results show on the unit's screen)")
     p.add_argument("--usb-net", type=float, metavar="SECONDS",
                    help="the program takes over USB as a network adapter (dram/ncmtest.c): find the "
                         "Mac's new interface, wait for its address and ping the unit")
@@ -54,6 +56,9 @@ def main():
     t0 = time.perf_counter()
     before = subprocess.run(["ifconfig", "-l"], capture_output=True, text=True).stdout.split()
     xfel("exec", hex(LOAD))
+    if a.detach:
+        print("started; FEL is no longer needed (the program owns USB now)")
+        return
     if a.usb_net:
         return usb_net(a.usb_net, before)
     if a.usb_serial:

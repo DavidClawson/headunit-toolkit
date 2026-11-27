@@ -3,7 +3,7 @@ CROSS ?= riscv64-elf-
 CFLAGS = -march=rv64gc_zicsr -mabi=lp64d -mcmodel=medany -O2 -ffreestanding \
          -fno-builtin -nostdlib -nostartfiles -Wall -Wextra -fno-tree-loop-distribute-patterns
 LDFLAGS = -T dram.ld -Wl,--build-id=none -Wl,--no-warn-rwx-segments
-PROGS = stage1 memtest clock dsi1 dsi2 dsion dsi3 dsi4 ui touch touchrate vsync app hang radio twiscan bdtest bbscan bttest calltest pbtest spitest bltest ledtest audtest dmatest mixtest adctest usbtest ncmtest
+PROGS = stage1 memtest clock dsi1 dsi2 dsion dsi3 dsi4 ui touch touchrate vsync app hang radio twiscan bdtest bbscan bttest calltest pbtest spitest bltest ledtest audtest dmatest mixtest adctest usbtest ncmtest iphonetest
 
 all: $(PROGS:=.bin)
 

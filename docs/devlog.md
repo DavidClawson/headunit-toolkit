@@ -846,3 +846,35 @@ three USB packets each way) all answered. The unit's counters: 1 bus reset,
     switch.
   - `carplay.mod` brings its own lwIP, so the host only passes NCM frames
     through `ncm_send_cb` (see `docs/carplay-host.md`).
+
+**USB host mode: our code reads an iPhone (2026-11-27).** `iphonetest.c`
+(read-only) switches USB0 to host and reads the device, configuration and
+string descriptors of whatever plugs in. It sends nothing else: no
+`SET_CONFIGURATION`, no vendor requests, and the serial-number string is not
+read. Run it with `felrun.py dram/iphonetest.bin --detach`, then swap the Mac's
+cable for the device.
+
+- **The ports:**
+  - **USB-A is USB0** (the FEL port, dual-role MUSB) and the **wired CarPlay
+    port**: stock starts wired CarPlay there.
+  - **USB-C is the other controller** (USB1, host-only): it charges, but stock
+    won't start CarPlay there, and our USB0 code doesn't see devices on it.
+- **USB-A's 5 V is a GPIO: PD18** (`usb0PowerGpio=318` in the unit's
+  `Config.ini`, decoded earlier in this log). Without it, nothing connects.
+- **The role switch:** the MUSB picks host or device when a session starts.
+  End the FEL session (`DEVCTL = 0`), force the PHY's ID low and VBUS valid
+  (ISCR at `USB0 + 0x400`), turn on PD18, then start a session
+  (`DEVCTL = 1`). `DEVCTL` then reads `0x5D` (host) once a device is attached.
+- **Result:** the iPhone reads as `05AC:12A8` "Apple Inc." / "iPhone" at high
+  speed, with 0 errors. It has 4 configurations:
+  1. PTP;
+  2. USB audio + HID;
+  3. PTP + usbmux (`FF/FE/02`);
+  4. PTP + usbmux + tethering (`FF/FD/01`, 3 alts).
+
+  There are no CarPlay interfaces, as expected: after the role switch the
+  iPhone is the host and the head unit presents iAP2 + NCM.
+- **Not charging** during the test: we never configure the phone, and Apple
+  phones also look for charger signalling.
+- **Next:** the role-switch request and the device-side interfaces stock
+  presents afterwards.
