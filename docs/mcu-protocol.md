@@ -164,3 +164,47 @@ checked by hand (press a remote key, ground the brake wire) without FEL. `81 B9`
 app applies to the backlight) may be the dimmer input: the harness's orange
 illumination wire (standard car-stereo colour). `illDetectGpio=-1` says it isn't an
 F133 pin, so the MCU reads it.
+
+## Bluetooth and key LEDs (2026-11-27, tested)
+
+**The Bluetooth module is a separate part on UART4** (PB2 TX / PB3 RX,
+function 7, 115200 8N1). It answers `AT#MY` with
+**`MWLITIANTAI_WB020_20250422_01`**. It keeps its own pairing list, so a paired
+phone reconnects whatever firmware the F133 runs. The AB5301 only passes on a
+few status lines at start-up (`81 D4`: `IS`, `II`, `MMCAR BT`, …). The stock app
+can also tunnel commands through the MCU (`80 D4` + `AT#xx\r\n`,
+`btModule=1`), but the stock config uses UART4 directly (`btModule=0`), and so
+do we.
+
+**Commands** (`AT#xx\r\n`, raw on UART4):
+
+| Command | Meaning |
+|---|---|
+| `MA` / `MB` | pause / play |
+| `MD` / `ME` | next / previous |
+| `MY` | module version |
+| `CC` / `CD` | connect last / disconnect |
+| `CE` / `CF` / `CG` | answer / reject / hang up |
+| `CW<number>` | dial |
+
+**Never send `UP`** (module firmware update).
+
+**Status lines** (text, CR LF):
+
+| Line | Meaning |
+|---|---|
+| `MI<title>\|<artist>\|<album>\|<length ms>\|` | track info; fields separated by `0xFF`, sent several times as fields fill in |
+| `MPppppppppdddddddd` | position and length in seconds, 8 digits each, sent every second while playing |
+| `MA` / `MB` | paused / playing (preceded by `MU3` / `MU4`) |
+| `IA` / `IB` | phone disconnected / connected |
+| `ID<num>`, `IG`, `IF` | ringing / call active / call ended |
+
+**Audio:** BD3702 input `0x05 = 0x0A` (`btmChannelA=10`). The MCU source
+command `A7 [0B 00]` is what stock sends for BT music; it isn't yet known whether
+it's needed.
+
+**Key LEDs:** `B0 [FE 00 00 t m]`. `m`: 0 cycle, 1 purple, 2 red, 3 yellow,
+4 cyan, 5 white, 6 blue, 7 green, `FF` off; `t` = cycle seconds. The MCU echoes
+the setting as `81 B2 [00 FE 00 00 t m]`. Stock defaults to cycle, every 5 s,
+which is why the buttons colour-cycle when nothing sets them.
+- White: `02 80 B0 05 FE 00 00 05 05 CB`.

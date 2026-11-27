@@ -47,7 +47,7 @@ Legend:
 | CarPlay / AA | `usbIphoneLink=1`, `usbAndroidLink=2` | ✅ works in stock | owner's use |
 | Wireless CarPlay/AA | `wireless.mod`, `wifiChannel=36` | ❓ | |
 | WiFi | `sys_config`: SDIO on MMC1, `wifi_mod_sel=3` | ❓ chip unnamed (RTL8723-class guessed from the boot command line) | |
-| Bluetooth | `btSerialName=/dev/uart4`, AT commands | ⚠️ BT status text arrives from the MCU (`81 D4`: "MMCAR BT"); UART4 silent from FEL | MCU traffic |
+| Bluetooth | `btSerialName=/dev/uart4`, AT commands | ✅ **LITIANTAI WB020** module on UART4 (PB2/PB3, 115200), audio into BD3702 input `0x0A`; play/pause/next and track info work | `bttest.c` |
 | USB (front) | USB0 OTG; FEL | ✅ FEL, host for sticks | daughterboard with a hub-like part ❓ |
 | microSD | `card0_boot_para`; manual says there is a slot | ❌ no slot fitted | inspection |
 
