@@ -31,3 +31,15 @@ void logf(const char *fmt, ...);   /* %s %c %d %u %x %lx %lu %p, width/zero-pad 
 
 void *memset(void *d, int c, size_t n);
 void *memcpy(void *d, const void *s, size_t n);
+
+/* C906 (T-Head): write back and invalidate the whole D-cache (th.dcache.ciall),
+   so a DMA reader (display engine) sees what the CPU wrote. The BROM leaves the
+   D-cache on, write-back, with the T-Head extensions enabled (mxstatus bit 22). */
+static inline void dcache_flush(void)
+{
+	__asm__ volatile(".long 0x0030000b\n\tfence rw, rw" ::: "memory");
+}
+static inline uint32_t mhcr(void)
+{
+	uint32_t v; __asm__ volatile("csrr %0, 0x7c1" : "=r"(v)); return v;
+}

@@ -457,3 +457,10 @@ DRAM programs run with `felrun.py`:
 3. **TCON pattern over DSI video:** colour bars, stable. No display engine yet.
 
 Next: stage 4, a DE2 mixer UI layer reading a framebuffer in DRAM.
+
+Later the same evening: **stage 4, a framebuffer.** DE2 mixer 0 with one UI
+layer scanning a 720×1280 buffer in DRAM, through TCON TOP into the TCON and
+over DSI. Corner markers pinned down the orientation (buffer x runs up the
+landscape screen, buffer y runs across). `tools/fel/fbshow.py` pushes any image
+over FEL in ~8 s, and the screen shows it as it arrives. The display is now
+ours: next is drawing on the device instead of from the host.

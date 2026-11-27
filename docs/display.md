@@ -1,9 +1,9 @@
 # Display: panel facts and bring-up plan
 
 Goal: light the LCD from our own code over FEL (no stock firmware), as the
-base for a clean-sheet UI. Status: **stages 1–3 work** (2026-11-26): the panel answers over DSI, takes
-the stock init, and shows the TCON's colour-bar pattern over DSI video, stable.
-Stage 4 (DE2 framebuffer) next.
+base for a clean-sheet UI. Status: **all four stages work** (2026-11-26): our own code drives the panel
+from a framebuffer in DRAM. `felrun.py dram/dsi4.bin` brings the pipeline up;
+`tools/fel/fbshow.py` puts any image on it.
 
 ## The panel (from `sys_config_nor.fex` `[lcd0]` / `[mipi_reg]`)
 
@@ -73,8 +73,25 @@ Programs in `tools/fel/dram/` (shared code in `dsi.c`, init table
 | `dsi1` | Panel answers DCS reads with bus turnaround: power mode `0A` = `0x08` (sleeping, display off), pixel format `0C` = `0x70` (24 bpp). ID registers `DA`–`DC` and `04` read `00` (not programmed by the panel maker). |
 | `dsi2` | All 210 `[mipi_reg]` writes accepted; power mode goes `0x08` → `0x18` (sleep out, normal mode). Display-on bit stays clear without video, even after resending `29`. Backlight on: black. |
 | `dsi3` | TCON LCD0 in CPU/DSI mode, pattern 1, DSI non-burst video at 420 Mbit/s per lane: **colour bars** (red/green/blue/white gradients, 4 columns × 3 rows), stable. |
+| `dsi4` | DE2 mixer 0, UI channel 1 layer 0, 720×1280 XRGB8888 at `0x41000000`, routed via TCON TOP (`PORT_SEL` = `0x20`: mixer 0 → LCD0, mixer 1 parked on TV0), TCON source 0: **the framebuffer is on screen**. The pipeline keeps running after the program returns, so FEL writes to the buffer show up directly. |
 
 Clock setup that works: PLL_VIDEO0 = 1680 MHz (4x) so pll-video0 = 420 MHz →
 TCON LCD0 module clock 420 MHz, DCLK divider 4 (DSI rule: dclk = lane rate / 4);
 MIPI_DSI (D-PHY) module clock = pll-periph0 / 4 = 150 MHz; D-PHY PLL VCO
 3360 MHz (div 8, n 140). `power2` needs nothing: the panel is powered under FEL.
+
+### Orientation
+
+The panel is portrait in memory (720 × 1280) and viewed landscape (1280 × 720).
+Measured with corner markers:
+
+- buffer x (0 → 719) runs **bottom → top** of the screen,
+- buffer y (0 → 1279) runs **left → right**,
+
+so screen pixel (sx, sy) is buffer pixel (x = 719 − sy, y = sx): a landscape
+image goes into the buffer rotated 90° clockwise (`fbshow.py` does this).
+
+Notes: the DE clock is pll-periph0-2x / 4 = 300 MHz (Linux asks 297 MHz). The
+D-cache is **off** under FEL (`mhcr` = `0x109`), so CPU writes reach the display
+engine without flushing; `lib.h` has `dcache_flush()` (`th.dcache.ciall`) for
+when it isn't.
