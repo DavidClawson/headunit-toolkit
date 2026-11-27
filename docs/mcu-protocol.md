@@ -143,23 +143,23 @@ effects is not mapped yet.
 
 The bench unit's harness has an input bundle: steering-wheel control 1 and 2,
 brake detect, `FCCD`, ground, and "back car control" (reverse trigger).
-The unit also has an IR remote and a small photosensor on the front panel, a
-wired hands-free microphone, and a video input. From `sys_config`, `Config.ini`
+The unit also has an IR remote (its receiver pokes out of the front panel; no
+ambient-light sensor is known), a wired hands-free microphone, and a video input. From `sys_config`, `Config.ini`
 and the app's MCU frame handlers, most of them likely reach the F133 through the
 MCU. **All of this is inferred and untested.**
 
 | Input | Likely path | Evidence |
 |---|---|---|
-| IR remote | MCU decodes it and sends key frames (`81 B2`) | `sys_config` `[s_cir0] s_cir0_used = 0`, `cir_pin` commented out (the F133's IR receiver is unused); an `[ir_code]` table exists |
+| IR remote (front-panel receiver) | MCU decodes it and sends key frames (`81 B2`) | `sys_config` `[s_cir0] s_cir0_used = 0`, `cir_pin` commented out (the F133's IR receiver is unused); an `[ir_code]` table exists |
 | Steering-wheel control 1/2 | MCU ADC (resistor ladder), sent as key frames | the factory menu's "Touch Learning" (key remap) |
 | Brake detect | MCU, `81 A6` flags | `brakeDetectGpio=-1` (not an F133 pin); `A6` carries vehicle-input bits |
 | FCCD (front camera trigger) | MCU, `81 A6` data[1] bit `0x01` | app log string "Fccd" in the `A6` handler |
 | Back car control (reverse) | MCU, `81 A6` flags | the `A6` handler's "开始倒车" ("start reversing") path |
-| Photosensor | MCU, maybe `81 B9` subtype 4 (a 0–100 level the app applies as brightness) | `B9` subtype 4 handling |
 | Camera / video input | Techpoint TP2850 on TWI2 `0x44` (AHD/CVBS → BT656) into the F133 | chip ID read over I2C |
 | Hands-free mic | probably the Bluetrum (BT hands-free), or the F133's ADC | `[MIC]` section, `micDetectGpio=-1` |
 
 The `A6` frame seen so far (`00 04 …`, then `00 44 …` after source = Radio)
 fits this. A live MCU-frame monitor in our firmware would let each input be
-checked by hand (press a remote key, ground the brake wire, cover the sensor)
-without FEL.
+checked by hand (press a remote key, ground the brake wire) without FEL. `81 B9` subtype 4 (a 0–100 level the
+app applies to the backlight) may be a dimmer input such as the illumination
+wire, not a light sensor.
