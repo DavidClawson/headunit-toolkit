@@ -51,7 +51,7 @@ int main(void)
 	while (ticks() - t0 < SECONDS * 1000000u * TICKS_PER_US) {
 		touch_pt pt[5];
 		int n = gt911_poll(pt, 5);
-		if (n == -1) { udelay(5000); continue; }
+		if (n == -1) { udelay(1000); continue; }
 		if (n < -1) { errors++; udelay(20000); continue; }
 		frames++;
 		int hit = -1;

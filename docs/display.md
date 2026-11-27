@@ -121,10 +121,12 @@ polling) on TWI3 (PG10/PG11), INT PG07, RESET PG08. The GT911 reports in its
 own configured resolution, **1024 × 600, already in landscape screen
 orientation**, so screen = raw × (1280/1024, 720/600): no flips or swaps.
 Verified with `touch.c`: tiles light under the finger, dots land under it.
-ID `911`, firmware `0x1060`. Open: only 74 reporting frames in the 30 s run
-(56 with a touch), well below the GT911's usual ~100 Hz while touched; worth
-checking (config refresh rate, or how the poll loop clears the status) before
-anything needs smooth drags.
+ID `911`, firmware `0x1060`. Config (`0x8047`–`0x8056`, from `touchrate.c`):
+version `0xc8`, 1024 × 600, 10 touch points, INT mode 1, refresh setting 10 ms.
+**Report rate measured: one frame every 15–20 ms (~58 Hz) while touched**, no
+dropouts, and nothing between touches (only a release frame), so frame counts
+measure contact time, not controller speed. We leave the config alone: on some
+GT911 firmware a config write is saved to its flash.
 
 The earlier "touch doesn't report in caught-FEL sessions" (via `buttons.py`)
 wasn't chased; from the DRAM program, in a caught-FEL session, it reports
