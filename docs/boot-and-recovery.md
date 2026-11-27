@@ -301,8 +301,9 @@ What this gives:
 1. **FEL first contact** (above): load → run → read-back with `probe.bin`. **Done.**
 2. **Map the hardware from RAM**: backlight **done** (PG15 enable + PD22/PWM7,
    lit and blinked from FEL, `tools/fel/backlight.sh`) and hardware PWM dimming
-   **done** (PWM7 at 50 kHz, `tools/fel/pwm-backlight.sh`). Next: test programs for the
-   LCD (`he0801a068`, MIPI-DSI), GT911 touch, and UART pins from `sys_config`.
+   **done** (PWM7 at 50 kHz, `tools/fel/pwm-backlight.sh`); GT911 touch on TWI3 `0x5d`
+   **done** (ID and live coordinates, `tools/fel/i2c.py`); TWI2 has devices at
+   `0x10`, `0x40`, `0x44`. Next: identify those, then the LCD (`he0801a068`, MIPI-DSI).
    Build on the existing open D1s work (xboot, RT-Thread, mainline U-Boot/Linux)
    rather than from nothing.
 3. **Boot selector with watchdog fallback**: keep the stock boot0. The selector

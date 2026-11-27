@@ -13,6 +13,8 @@ the first-contact kit; the background is in
 | `probe.S` | First test program: reads CPU ID registers, times a loop, bumps a run counter, writes `0x600DF00D`, returns to FEL. Touches no peripherals. |
 | `backlight.sh` | Backlight test: drives PG15 (`lcd_bl_en`) and PD22 (PWM7, held high) as GPIOs. `status`, `on`, `off`, `blink [n]`. **Works** (2026-11-26). |
 | `pwm-backlight.sh` | Hardware PWM dimming on PWM7 (PD22, 50 kHz from 24 MHz / 480). `init`, `duty <0-100>`, `ramp [n]`, `status`. **Works** (2026-11-26). |
+| `i2c.c` / `i2c.py` | I2C over FEL: SRAM payload + host tool. `scan`, `read`, `write`, `gt911-id`, `gt911-touch`. **Works** (2026-11-26). |
+| `payload.ld` | Linker script for C payloads (entry at `0x40000`, request block at `0x40F00`). |
 | `Makefile` | `make` builds `probe.bin` (load address `0x40000`). |
 
 Both scripts use the Pico + SOIC-8 clip setup from the recovery doc and refuse
@@ -122,6 +124,24 @@ PD22 function 5 = PWM7
 ```
 
 Duty changes written to PPR7 take effect while the channel runs.
+
+## I2C and touch (2026-11-26)
+
+`i2c.py` loads `i2c.bin` into SRAM, muxes the bus pins, and runs one transfer
+per `xfel exec` (request block at `0x40F00`). A bus scan takes about 0.5 s.
+
+| Bus | Pins | Devices that ACK |
+|---|---|---|
+| TWI3 | PG10 SCL / PG11 SDA (func 3) | `0x5d`: Goodix GT911 touch |
+| TWI2 | PE12 SCL / PE13 SDA (func 2) | `0x10`, `0x40`, `0x44` (not identified yet) |
+
+GT911: product `911`, firmware `0x1060`, stored config 1024 × 600, 10 points.
+Live touches read cleanly. Raw frame is **landscape**: x 0→1024 left to right,
+y 0→600 top to bottom (corners ≈ (90,112), (939,136), (925–955,482–505),
+(85–106,449–483); a horizontal drag ran x 84→898 at y ≈ 310–347). The panel is
+720 × 1280 portrait, so it's mounted sideways and the stock firmware rotates
+the picture and scales touch to match. No reset sequence was needed: the GT911
+was already at `0x5d` at power-on.
 
 ## Memory used
 

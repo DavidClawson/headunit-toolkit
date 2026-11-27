@@ -33,7 +33,12 @@ it's reverse-engineering facts and test results from a unit we own.
   switched PD22 to function 5, and swept the duty 0 → 100 → 0. The backlight
   dimmed smoothly. Register layout matches Linux `pwm-sun20i.c`, so the
   D1-family drivers can be reused for this board.
-- **Next:** more hardware-mapping tests over FEL (panel init over MIPI-DSI, touch),
+- **I2C + touch over FEL:** `tools/fel/i2c.c` (SRAM payload) + `i2c.py` (host).
+  TWI3 (PG10/PG11) has the touch controller at `0x5d`: Goodix GT911, firmware
+  `0x1060`, config 1024 × 600. Live touches read back correctly; the raw frame is
+  landscape (x left→right, y top→bottom), so the 720 × 1280 panel is mounted
+  sideways. TWI2 (PE12/PE13) has three more devices: `0x10`, `0x40`, `0x44`.
+- **Next:** identify the TWI2 chips, then panel init over MIPI-DSI,
   then a boot selector with watchdog fallback. Plan in
   [boot-and-recovery.md](boot-and-recovery.md#plan-clean-sheet-firmware-with-fallback).
 
