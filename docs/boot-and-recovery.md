@@ -1,210 +1,432 @@
-# Boot, recovery, and a planned firmware selector
+# Boot and recovery
 
-The single most important thing before any risky flashing: **this SoC has a
-hardware recovery path that software cannot disable.** Set that up first and
-the rest is low-stress.
+How to get a W022 back from a bad flash, and what we know about its boot chain.
 
-## Boot order (the free A/B)
+**The short version:** the firmware lives on a 16 MB SPI flash chip that you can
+read and rewrite **directly with a SOIC-8 clip and a Raspberry Pi Pico**, without
+the unit's software doing anything. That has been done on the bench unit and
+recovered it from a boot hang (2026-11-25). Back up the chip before any risky
+experiment and a bad flash costs about ten minutes.
 
-Allwinner's BootROM tries boot sources in priority order and falls back:
+## Recovering a bricked unit: SPI flash clip (verified)
+
+Use this when the unit won't boot far enough to take a USB update (for example,
+stuck at the splash) and reflashing the stock image from a stick does nothing.
+That's what happened after the first `hostmod` test: the USB updater lives in
+the app, so if boot hangs before the app runs, a stick can't fix it.
+
+### What you need
+
+- A **SOIC-8 test clip** (the kind sold with CH341A programmer kits; use only the
+  clip and its little 8-pin adapter board).
+- A **Raspberry Pi Pico** (RP2040) and jumper wires.
+- `flashrom` on the Mac: `brew install flashrom` (tested with 1.8.0).
+- To build the Pico firmware: the Pico SDK (`PICO_SDK_PATH`, tested with 2.2.0),
+  `cmake`, and `arm-none-eabi-gcc`.
+
+> **Skip the CH341A programmer in those kits.** The common black board drives its
+> data lines at ~5 V even with the jumper on 3.3 V. This chip is 3.3 V, and
+> in-circuit those signals also reach the F133. The Pico is 3.3 V throughout.
+
+### The flash chip
+
+On the mainboard (silkscreen `FR4 REV.09`), next to a small silver 24 MHz crystal
+marked `YL240` and with an orange factory dot on it:
+
+| | |
+|---|---|
+| Part | **XMC XM25QH128D** (`XM25QH128DHIQ`), 16 MB, 3.3 V |
+| Package | SOP-8 **208 mil** (wide body; standard clips fit) |
+| JEDEC ID | `0x20 0x4018` |
+| flashrom name | `XM25QH128C/XM25QH128D` |
+| Pin 1 | the corner with the small round dimple |
+
+Pins count counter-clockwise from pin 1 (viewed from above): 1–4 along pin 1's
+side, 5–8 back along the other.
+
+### 1. Turn the Pico into a flash programmer
+
+[`pico-serprog`](https://github.com/stacksmashing/pico-serprog) makes the Pico
+speak flashrom's `serprog` protocol over USB. It has no release builds, so build
+it:
+
+```sh
+git clone https://github.com/stacksmashing/pico-serprog && cd pico-serprog
+cmake -S . -B build -DPICO_BOARD=pico      # pico2 for an RP2350 board
+make -C build                              # -> build/pico_serprog.uf2
+```
+
+Hold **BOOTSEL** while plugging in the Pico, copy `pico_serprog.uf2` onto the
+`RPI-RP2` drive, and it re-enumerates as `/dev/cu.usbmodem*`.
+
+### 2. Wire the clip to the Pico
+
+Plug the clip's ribbon into its 8-pin adapter board (red wire = pin 1), then run
+jumpers from the adapter's numbered pins:
+
+| Flash pin | Signal | Pico pin | Pico label |
+|---|---|---|---|
+| 1 | CS | 2 | GP1 |
+| 2 | DO (MISO) | 6 | GP4 |
+| 3 | WP# | 36 | 3V3(OUT) |
+| 4 | GND | 3 | GND |
+| 5 | DI (MOSI) | 5 | GP3 |
+| 6 | CLK | 4 | GP2 |
+| 7 | HOLD# | 36 | 3V3(OUT) |
+| 8 | VCC | 36 | 3V3(OUT) |
+
+**Never use Pico pins 39 (VSYS) or 40 (VBUS):** they're 5 V.
+
+### 3. Connect and check
+
+1. **Unplug the head unit's 12 V completely.** The Pico powers the chip.
+2. Seat the clip with the red wire on pin 1. Look at all eight contacts from
+   the side: each must sit on a leg, not on the plastic.
+3. Plug the Pico into the Mac and probe (read-only):
+
+```sh
+P=$(ls /dev/cu.usbmodem* | head -1)
+F="flashrom -p serprog:dev=$P:115200,spispeed=4M -c XM25QH128C/XM25QH128D"
+flashrom -p serprog:dev=$P:115200,spispeed=4M      # expect: Found XMC flash chip "XM25QH128C/XM25QH128D"
+```
+
+If it reports `No EEPROM/flash device found`, look at the raw ID with
+`-V | grep id1`:
+
+| `id1` reads | Likely cause |
+|---|---|
+| `0x00` everywhere | clip not seated, or a wire missing. **This was it on our unit.** Reseat and retry. |
+| `0xff` everywhere | DO (pin 2) not reaching GP4 |
+| `0x20, 0x4018` but not "Found" | add `-c "XM25QH128C/XM25QH128D"` |
+
+Powering the chip from the Pico in-circuit also back-feeds part of the board's
+3.3 V rail. On our unit that was fine. If reads are flaky or the two dumps differ,
+measure flash pin 8 to pin 4 (should be about 3.3 V). If it's sagging, power those
+three 3V3 wires from a stronger 3.3 V source (a Raspberry Pi's pin 1, or a bench
+supply) with its ground tied to the Pico's.
+
+### 4. Back up twice, compare
+
+```sh
+mkdir -p stock/nor          # stock/ is gitignored: never commit flash dumps
+$F -r stock/nor/dump1.bin   # ~45 s
+$F -r stock/nor/dump2.bin
+cmp stock/nor/dump1.bin stock/nor/dump2.bin && echo IDENTICAL
+```
+
+**Don't write anything until two reads match.** Keep these dumps: they're the
+exact state of the chip, including your settings partition.
+
+### 5. Repair only what's broken
+
+The flash map (verified against our dump and the stock update image):
+
+| Offset | Size | Contents | From the update image |
+|---|---|---|---|
+| `0x000000` | 48 KB | boot0 | `boot0_nor.fex` |
+| `0x010000` | 1.06 MB | Melis kernel package | `melis_pkg_nor.fex` |
+| `0x130000` | `0xdf0000` (13.9 MB) | MINFS data partition (`/apps`, `/mod`, `/startup.sh`, ...) | `data_udisk.fex` |
+| `0xf20000` | to end (896 KB) | `UDISK`: user data and settings | not in the image |
+
+A bad mod normally only touches the data partition. Rebuild the chip image with
+the stock data partition and everything else as it was read:
+
+```python
+from headunit import ImageWTY
+d = bytearray(open("stock/nor/dump1.bin", "rb").read())
+stock = bytes(ImageWTY.from_path("stock/LTTF133.img").read("data_udisk.fex"))
+d[0x130000:0x130000 + len(stock)] = stock
+open("stock/nor/restored.bin", "wb").write(d)
+```
+
+Check that the boot0 and kernel regions in the dump already match the stock
+image before trusting them (search the dump for each `.fex`). In our case
+they did, and the repair changed only **three 4 KB blocks** (directory entries,
+`startup.sh`, and the module slot).
+
+### 6. Write just that partition, verify
+
+A layout file lets flashrom touch only the data region:
+
+```sh
+printf '00000000:0012ffff boot\n00130000:00f1ffff data\n00f20000:00ffffff udisk\n' > stock/nor/layout.txt
+$F -l stock/nor/layout.txt -i data -w stock/nor/restored.bin   # ends with "VERIFIED."
+$F -r stock/nor/after.bin && cmp stock/nor/after.bin stock/nor/restored.bin && echo MATCHES
+```
+
+flashrom erases and rewrites only the sectors that differ (under a minute).
+
+### 7. Boot
+
+Unplug the Pico, **take the clip off** (dangling wires on the SPI bus can upset
+the boot read), connect 12 V. Ours booted straight to the normal UI.
+
+A few minutes on the bench with the die-cast back/heatsink off is fine if no
+speakers are connected and nothing is playing. Keep the amp's metal tab clear of
+anything conductive, and refit the heatsink before real use.
+
+### Keep a known-good backup
+
+Once a unit boots normally, read it once more (`after.bin` above) and keep that
+file. It's the one to write back after any future experiment.
+
+## The debug UART (located, but apparently not connected)
+
+> **Update 2026-11-26:** on the bench unit, PB6/PB7 (legs 17/18) seem to have
+> **no traces leaving them**, and continuity probing found nothing on the board
+> that connects to either pin. The vendor likely never routed the debug console
+> on this board revision. The notes below stay for reference; for a console, use
+> FEL instead (`tools/fel/felrun.py` reads a log buffer back over USB).
+
+The kernel console is on **UART3**: `boot0`'s header and `[uart_para]` in
+`sys_config_nor.fex` agree on **TX = PB6, RX = PB7, 576000 baud 8N1** (not
+115200).
+
+On the F133 (eLQFP128, [datasheet](https://mangopi.org/_media/f133_datasheet_v1.2.pdf)
+§7.1), **PB6 is pin 80 and PB7 is pin 79.** Physically, with the chip's text upright
+the pin-1 dot is at the **bottom-left**, so the datasheet's right-hand side is the
+**top edge**. Counting legs from the **left** end of the top edge:
+
+| Leg from left | Pin | Signal |
+|---|---|---|
+| 14 | 83 | VCC-IO (3.3 V) |
+| 15 | 82 | PB5 |
+| 16 | 81 | **VDD-SYS2: core supply, measured 0.926 V** |
+| **17** | **80** | **PB6 = debug TX** |
+| **18** | **79** | **PB7 = debug RX** |
+| 19 | 78 | TVOUT0 |
+| 20 | 77 | VCC-TVOUT |
+
+The 0.9 V on the 16th leg is the landmark that confirms the orientation: nothing
+else nearby sits that low.
+
+> **Don't hand-solder to these legs** unless you have the tools and practice for
+> 0.4 mm pitch. TX sits between the core supply and RX. A first attempt on the
+> bench unit bridged four legs. Never power the unit with a suspected bridge on
+> this edge; clear it with flux and fine wick, then check that the 16th leg
+> doesn't beep to its neighbours. Better options:
+>
+> - **Read-only, no solder:** hold a fine needle on the 17th leg during boot,
+>   with the Pico listening (below).
+> - Follow the TX trace to a via or resistor and solder there instead.
+> - Have a phone-repair shop attach the three wires.
+
+`sys_config` also lists PB6 as `usbc0`'s `usb_id_gpio` and gives PB7 a mode
+value that may mean "output", both probably vendor-template leftovers. Put a
+1 kΩ resistor in series with anything you drive into RX.
+
+**Pico as a 576000-baud USB serial adapter:** [`tools/pico-uartbridge`](../tools/pico-uartbridge)
+(GP1 = RX from the unit's TX, GP0 = TX to the unit's RX, plus GND). The LED
+blinks when data arrives.
+
+```sh
+cd tools/pico-uartbridge && cmake -S . -B build -DPICO_BOARD=pico && make -C build
+# BOOTSEL, copy build/uartbridge.uf2, then:
+cat /dev/cu.usbmodem*      # USB CDC: the baud setting here doesn't matter
+```
+
+What it should give: the full boot log (boot0, kernel, each `insmod` in
+`startup.sh`, crash dumps), our modules' `melis_puts` output, and possibly the
+Melis shell if RX works, which would allow loading test modules by hand
+(`insmod f:\x.mod`) without writing them to flash.
+
+## Boot order
+
+Allwinner's BootROM tries, in order:
 
 ```
 SD card (MMC0)  →  SPI-NOR (boot0)  →  FEL (USB recovery)
 ```
 
-The firmware ships `boot0_card.fex` / `cardtool.fex`, confirming the platform
-supports booting from SD. So the simplest "selector" needs **no code**:
+The firmware ships `boot0_card.fex`, `cardtool.fex`, and a card-product
+`cardscript.fex` (boot0 at sector 16, boot package at 32800, image at 40960), and
+`sys_config` enables `sdc0` on PF0–PF5. **But the bench W022 has no SD slot
+fitted** (the manual shows one, front top-right; ours has none). So SD boot and
+PhoenixCard-style card recovery aren't available on this board without adding
+a slot, and the "pull the card to get stock back" A/B trick doesn't apply.
 
-- Stock firmware stays untouched on NOR.
-- An experimental build goes on a **bootable SD card**.
-- Card inserted → it boots your build. Card removed → it boots stock.
+## No secure boot (confirmed)
 
-That is already an A/B with the most reliable toggle possible: *is the card
-in?* Pull it and you're back to safe stock.
+**The boot chain is open.** boot0 ships as a plain `eGON.BT0` image, not a
+secure `TOC0` container, and a secure-efuse part *requires* `TOC0` at the boot0
+slot ("toc0 magic is error, need secure image"). The stock `eGON.BT0` boots, so
+the secure efuse is **not burned**. The only integrity check is the 32-bit
+additive checksum per partition. The sunxi verified-boot code is compiled into
+u-boot but dormant. No AVB/dm-verity/signatures. **A checksum-correct repack
+flashes and boots.**
 
-> Verify on a bench unit that the SD slot is wired to the **bootable MMC
-> controller**, not just as a media peripheral. Likely, given `boot0_card.fex`
-> ships — but some cheap boards cut that corner.
+**u-boot:** `U-Boot 2018.07-g1ffdfbf (Oct 18 2023)`, RISC-V. It is **not** in the
+normal boot path (boot0 loads Melis directly). It's used for "sprite" flashing
+(env `bootcmd=run sunxi_sprite_test`). Commands present include `fatload`,
+`sunxi_flash`, `sprite_test`, `efex`, `fel`, `md`, `go`.
 
-## No secure boot (confirmed) — and the boot software
+There is **no `env` partition** (commented out of the config), so a boot selector
+that remembers a default would have to carve one.
 
-**Verdict: the boot chain is open.** boot0 ships as a plain `eGON.BT0` image,
-not a secure `TOC0` container — and a secure-efuse part *requires* a `TOC0` at
-the boot0 slot and rejects `eGON.BT0` ("toc0 magic is error, need secure image"),
-so the fact that the stock `eGON.BT0` boots proves the secure efuse is **not
-burned**. The only integrity check over any partition is the 32-bit additive
-checksum (re-derived and matched on boot0/fes1). The sunxi verified-boot *code*
-(`sunxi_verify_rotpk_hash`, `burn_secure_mode`, efuse R/W) is compiled into
-u-boot but dormant — tooling to *optionally* burn secure mode, not enforcement.
-No AVB/dm-verity/signature/pubkey anywhere. **A checksum-correct repack flashes
-and boots.**
+## FEL (USB recovery, verified 2026-11-26)
 
-**u-boot:** `U-Boot 2018.07-g1ffdfbf (Oct 18 2023)`, platform `sun8iw19p1`,
-RISC-V toolchain. Full interactive console is enabled and reachable — **but at
-115200 baud**, while the Melis/kernel debug UART on the *same* PB06/PB07 pads is
-**576000**. So: interrupt autoboot at **115200** to drop to the u-boot prompt,
-then the OS log comes up at 576000. Autoboot delay is ambiguous in the env
-(`bootdelay` both `0` and `2` present) — confirm on UART. `fastboot`, `sprite`
-(in-system flash), `recovery`, and `efex`/FEL modes are all compiled in. u-boot
-re-entry to FEL: `run usb efex`, a misc boot-mode flag, `reboot efex`, or an
-IR/key-at-boot path.
+FEL is the BootROM's USB device mode, entered when no valid boot code is found.
+It uses the SoC's **USB0** (pins 114/115 on the F133). On the W022 the USB jack
+is on a **daughterboard** (4-wire red/white/green/black cable to the mainboard,
+its own QFN chip `U2`, footprints for USB-A and USB-C). **The front USB port
+reaches USB0 directly:** FEL enumerates through it, so `U2` isn't a hub in the
+way. Both controllers are configured as host in `sys_config`, which doesn't
+matter in FEL (the ROM uses USB0 as a device).
 
-**NOR partition layout** (GPT, ~16 MB):
+**How to get in: [`tools/fel/`](../tools/fel/README.md).** Instead of shorting
+flash pins at power-on, it uses the clip to erase only the first 4 KB (boot0's
+`eGON.BT0` header), so the BootROM finds nothing to boot and drops into FEL
+every time. Connect the front port to the Mac with an A-to-A/A-to-C cable with
+**VBUS cut** (both sides supply 5 V) and power on; the screen stays dark.
 
-| name | ~size | content |
-|---|---|---|
-| (pre-LBA32) | — | boot0 + GPT/MBR (raw NOR) |
-| `bootA` | 1.18 MB | `melis_pkg_nor.fex` |
-| `ROOTFS` | 14.6 MB | `data_udisk.fex` (the MINFS we mod) |
-| `UDISK` | 0.92 MB | user data |
+**Bench result (2026-11-26):**
 
-There is **no `env` partition** (env/env-redund are commented out of the config),
-so a boot-selector that persists a *default* choice would have to carve one; the
-SD-insert and button-at-boot variants need none.
+- The Mac saw `1f3a:efe8` 9 s after power-on: `xfel version` →
+  `AWUSBFEX ID=0x00185900(D1/F133)`.
+- A test program (`tools/fel/probe.bin`) loaded at `0x40000`, ran and returned
+  to FEL, twice: T-Head `mvendorid` `0x5b7`, hart 0,
+  `misa` `0x8000000000b4112d` (RV64 IMAFDC + S/U + V + X).
+- `xfel spinor` read the flash at about 400 KB/s (16 MB in about 40 s), matching
+  the clip dump.
+- **The boot0 header was put back over USB** (`xfel spinor write 0 hdr4k.bin`),
+  a full 16 MB read over USB matched the backup byte for byte, and the unit
+  booted normally. So once in FEL, recovery needs no clip.
 
-## FEL — the unbrickable recovery
+What this gives:
 
-FEL is a USB device mode in the mask boot ROM, entered when the ROM finds no
-valid boot code (or via a FEL trigger pin). The boot chain references it
-directly (`jump fel`, `crashdump mode, jump fel`), and the update image even
-*contains* the FEL/FES payloads (`fes1.fex`, `usbtool.fex`).
+- `xfel` can load and run code in SRAM/DRAM and read memory back, a test loop
+  that never writes the flash. That's the basis for working out the board's
+  hardware (pins, clocks, display, touch) with small test programs, starting from
+  the pin map in `sys_config_nor.fex`.
+- `xfel spinor` can read and write the flash over USB, without the clip.
+- As long as FEL works the unit can't be bricked for good: a bad boot0 just
+  lands back in FEL.
 
-Recovery recipe (to validate on the bench unit):
+### Plan: clean-sheet firmware with fallback
 
-1. Connect the SoC's **USB-OTG** path to a PC with `sunxi-tools` installed
-   (`sunxi-fel` supports D1/F133).
-2. Force FEL: briefly ground the SPI-NOR's CLK or DO at power-on so `boot0`
-   fails to load, dropping the ROM into FEL. (Exact pads are board-specific.)
-3. `sunxi-fel` pushes `fes1` + u-boot into RAM; reflash from there.
+1. **FEL first contact** (above): load → run → read-back with `probe.bin`. **Done.**
+2. **Map the hardware from RAM**: backlight **done** (PG15 enable + PD22/PWM7,
+   lit and blinked from FEL, `tools/fel/backlight.sh`) and hardware PWM dimming
+   **done** (PWM7 at 50 kHz, `tools/fel/pwm-backlight.sh`); GT911 touch on TWI3 `0x5d`
+   **done** (ID and live coordinates, `tools/fel/i2c.py`); TWI2 identified: `0x10`
+   Apple MFi auth, `0x40` sound processor (likely BD3702), `0x44` Techpoint TP2850
+   camera decoder. Tuner is on TWI1 but silent in FEL (reset/power). Next: tuner
+   reset pin, front-panel buttons, DRAM, then the LCD (`he0801a068`, MIPI-DSI).
+   Build on the existing open D1s work (xboot, RT-Thread, mainline U-Boot/Linux)
+   rather than from nothing.
+3. **Boot selector with watchdog fallback**: keep the stock boot0. The selector
+   sets a "trying experimental" flag in a register that survives reset, arms the
+   hardware watchdog, and boots the experimental image. A hang resets the unit,
+   the selector sees the flag and boots stock. FEL and then the clip stay as the
+   backstops.
+3a. **DRAM over FEL: done** (2026-11-26). `xfel ddr f133` with the board's own
+   parameters, 62 MB memtest clean, CPU at 1008 MHz afterwards; C programs run
+   from DRAM via `tools/fel/felrun.py`.
+3b. **Boot selector: done** (2026-11-26), as a patch to stock boot0 rather
+   than a new loader: every boot opens a 3 s, watchdog-guarded FEL window
+   that `tools/fel/fel-catch.sh` can hold open; otherwise stock boots. The clip
+   is now only the backstop. Details: `tools/fel/README.md`.
+4. **Clean stock → new firmware tests** once the above is proven on the bench.
 
-## The real safety net: dump the NOR first
+### Booting our firmware from the NOR (2026-11-26: built, written, every fallback verified)
 
-The flash is almost certainly an **SOIC-8 SPI-NOR**. With a ~$5 CH341A clip:
+boot0 after the FEL window (from the disassembly): DRAM init `0x27998`
+("dram size"), debug-key checks, clear `0x40800000`, then **`0x28d3c: jal
+0x284fa`** = load the Melis package: `0x2819c(0)` (flash init), `0x28080(128, 1,
+0x41000000)` (read sectors: start, count, destination), check magic
+`0x89119800`, read the whole package, then parse it and "Jump to second Boot.".
 
-1. **Read the entire NOR to a file before touching anything** (`nor_backup/`).
-2. If any flash goes wrong, write that dump back byte-for-byte — total
-   recovery, independent of FEL.
+- **Image:** header + program at NOR **`0x120000`** (64 KB, blank in every dump:
+  between the end of Melis at `0x120000` and MINFS at `0x130000`). Header: magic
+  `HUFW`, size, load address `0x40000000`, additive checksum. Built by `mkfw.py`.
+- **Selector:** a second hook in the boot0 patch (`tools/fel/bootsel/`), at
+  `0x28d3c`, reusing boot0's flash driver. Boots stock (tail-calls `0x284fa`) if
+  the image is missing/bad, or RTC **GP5** says `STOCK_ONCE` or `TRYING` (our
+  last attempt hung); clears GP5 either way. Otherwise GP5 = `TRYING`, watchdog
+  armed (8 s), image loaded, caches flushed, jump.
+- **Firmware:** `fw_boot_ok()` once display and input are up (clears `TRYING`,
+  disarms the watchdog). **Hold the status bar 3 s = boot stock once** (GP5 =
+  `STOCK_ONCE`, watchdog reset), with a countdown; lifting or sliding off
+  cancels. (A phone-key long-press was the first idea, but the MCU sends one
+  identical frame per press and nothing for holding, so a hold can't be seen.)
+  A return from `main` does the same.
+- **Default: ours** whenever a valid image is present. Permanent return to
+  stock-by-default: erase the image header over FEL.
+- **Safety:** nothing new runs before the FEL window. Hang → watchdog → stock on
+  that boot, ours again next power cycle. Bad patch → FEL window → write back
+  `boot0-felwin.bin`. Last resort: the clip. Writes to boot0 stay at exactly
+  48 KB: `0xC000`–`0x10000` holds data (not blank) and is left alone. A stock
+  USB-stick update may undo either part; the unit then simply boots stock.
+- **Step 1, built (2026-11-26):** `bootsel/fwboot.h` (the contract),
+  `bootsel/stub.S` `sel` (530-byte stub), `mkboot0.py` → `boot0-fw.bin`
+  (differs from stock only in the checksum, the three redirected instructions
+  and the stub), `dram/mkfw.py` (image + `--check` mirroring `sel`), `dram/fw.c`,
+  and the status-bar hold in `app.c` (verified under FEL: the countdown cancels
+  on lift, a full hold reboots into stock). The boot0 on the bench before this
+  (FEL window only) is saved as `stock/nor/boot0-felwin-v1.bin` for rollback.
+- **Step 2, done (2026-11-26):** `app.fw` written to `0x120000` with
+  `tools/fel/fw-write.sh` (checks the image, waits for a stable FEL link,
+  writes, verifies the whole slot: image, then blank). Stock still boots: the
+  image is inert under boot0 v1. `xfel spinor` works in caught-FEL sessions
+  (detect, read, 4 KB-granular erase/write); one early failure was the USB link
+  dropping for a moment right after a catch, which `fw-write.sh` now waits out.
+- **Step 3, done (2026-11-26):** boot0 v2 (`bootsel/boot0-fw.bin`) written
+  with `tools/fel/boot0-write.sh` (refuses unless the flash holds a boot0 it
+  knows; saved the old area to `stock/nor/boot0-area-before-*.bin`; verified the
+  48 KB and that `0xC000`–`0x10000` is unchanged). **On power-up the unit boots
+  our firmware from its own flash**: FEL window → selector → `app.fw` → our home
+  screen, "NOR" in the status bar. Rollback: catch, then
+  `tools/fel/boot0-write.sh stock/nor/boot0-felwin-v1.bin`.
+- **Step 4, fallbacks verified on the bench (2026-11-26):**
 
-Do this once per bench unit and experimentation becomes cheap.
+  | Test | Result |
+  |---|---|
+  | Hold the status bar 3 s | reboots into stock, once; the next power cycle boots ours |
+  | `dram/hang.fw` (red screen, then hangs without `fw_boot_ok()`) | red screen, watchdog reset after 8 s, FEL window, then **stock** |
+  | `bad.fw` (app with one byte flipped after checksumming) | **stock** straight away, no red screen |
+  | `app.fw` restored | ours again |
 
-## Hardware probing / HAL access (talk to the board directly)
+  | Freeze mid-session (Settings page, phone key) | watchdog restarts the unit after ~8 s, back into **ours** |
 
-"Could we build a little utility firmware to send commands and explore the
-HAL?" — yes, eventually, but **two cheaper probes already exist on this chip**
-before any custom build, and they're where to start. Three tiers, cheapest and
-safest first:
+  The firmware pets the selector's 8 s watchdog every main-loop pass
+  (`fw_pet()`: `WDT_CTRL` `0x020500B0` = `0xA57 << 1 | 1`, as Linux's D1 driver)
+  instead of disarming it. `fw_boot_ok()` clears GP5, so after startup a hang
+  is no longer a boot failure: the unit heals itself into ours, while a hang
+  *during* startup still falls back to stock.
 
-### Tier 1 — FEL (USB, no flash, lowest risk)
+  `fw-write.sh` erases the whole slot before writing and refuses images that
+  fail the selector's checks (`ALLOW_BAD=1` for this kind of test).
 
-FEL *is* "connect over USB and send commands." It's a BootROM USB protocol, so
-it needs no firmware of ours and touches no NOR. With `sunxi-fel` (from
-`sunxi-tools`, which supports D1/F133) over the **USB-OTG** path you can:
+**Day to day:** power on boots ours. To boot stock once: hold the status bar
+for 3 s. To update ours: `fel-catch.sh`, power-cycle, `fw-write.sh
+dram/app.fw`, `fel-boot-stock.sh` (despite the name, it just releases the unit
+to boot normally). To make stock the default again: catch, then `xfel spinor
+erase 0x120000 0x10000`. To remove the selector: `boot0-write.sh
+stock/nor/boot0-felwin-v1.bin`.
 
-- `sunxi-fel version` — confirm the link and read the SoC ID.
-- `sunxi-fel read <addr> <len> out.bin` / `write <addr> file` — peek/poke
-  arbitrary memory (SRAM/DRAM).
-- `sunxi-fel exe <addr>` — run a small payload from SRAM.
+- **Not pursued:** calling boot0's flash driver from a DRAM program under FEL
+  (to prove the calling convention early) hung the FEL session twice, and the
+  watchdog armed by the test never fired, so the program probably finished and
+  boot0's SPI init broke the USB link (clocks). RTC GP registers don't survive
+  the power cycle needed afterwards, so the breadcrumbs were lost. The real
+  selector runs in boot0's own context, where boot0 makes the same calls.
+- **Order** (read-back verify after every write): offline build and dry-run →
+  image to `0x120000` (inert under stock boot0) → boot0 v2 → power-cycle → test
+  each fallback on purpose (long-press, corrupted header, an image that hangs).
 
-Recovery is just re-entering FEL, so this is the safest surface for live
-experimentation. Entering it: the ROM drops to FEL when no valid boot code is
-found (see the recovery recipe above — briefly starve `boot0` at power-on), or
-via a FEL trigger pin if the board exposes one.
+## Other board notes (bench unit, opened 2026-11-24)
 
-### Tier 2 — UART serial console (live visibility, ~$3)
+- SoC: **F133-B** (eLQFP128). Bluetooth: Bluetrum "AB" LQFP48 with a 26 MHz
+  crystal. Buck regulators with 10 µH inductors (`100`).
+- Front-panel button/LED board on its own FPC (`J19`); the USB board as above.
+- The 10-hole `ANT` row is a tuner-module footprint.
+- No labelled UART/FEL test pads on either side of the mainboard.
 
-Melis almost certainly emits boot/debug output — and possibly an interactive
-shell — on a **debug UART**. A USB-TTL adapter (3.3V!) on the right pads gives a
-running log of what the HAL is actually doing, which is the fastest way to see a
-driver probe, a mount, or a crash. The pin assignment is **already in the stock
-build** (see "Finding the ports" below) — no guessing at pads.
+## Planned: a boot selector
 
-### Tier 3 — a custom "HAL explorer" app (the powerful version)
-
-Replace `init.axf` with our own Melis app that opens a USB-serial REPL and lets
-us call `esDEV_*` / `esMODS_*` and the `disp` / `g2d` / `cedar` ioctls
-interactively. This is the version that becomes the *foundation* for every
-ambitious feature (boot video, RadioText, a new mode), not just a diagnostic.
-
-Two caveats keep it in Tier 3:
-- **Prerequisite we don't have yet:** a Melis app build toolchain. We have the
-  exported API *symbols* and leaked source paths (`ekernel/arch/riscv/...`) but
-  not the SDK/linker setup to produce a loadable `.axf`. Reconstructing that ABI
-  is the real cost — and the real unlock.
-- Booting our own app **temporarily removes CarPlay/AA**. Fine on a bench unit
-  with a NOR backup; never on the car unit.
-
-So the sequence is: **FEL first** (free, safe, immediate), **UART second** (cheap,
-live), and the custom app as the payoff of cracking the build toolchain.
-
-### Finding the ports (read the stock build, then look under the shield)
-
-We shouldn't need to probe blindly. Two sources:
-
-1. **`sys_config_nor.fex`** in the stock image is the board's pinmux/config
-   table (same file that gave us `lcd_x`/`lcd_y` and the logo settings) — and it
-   ships as **plain-text INI** (GBK comments, ASCII keys), so no decoder is
-   needed. The verified pin map from the stock W022 image:
-
-   | Interface | SoC pins | Notes |
-   |---|---|---|
-   | **Debug UART console** | **PB06 = TX, PB07 = RX** | `uart_debug_port=3`, **baud 576000** 8N1 |
-   | **USB-OTG / FEL** | USB0 controller (`usbc0`, `usb_used=1`) | the `sunxi-fel` port |
-   | **GT911 touch** | TWI3: PG10 SCL / PG11 SDA | addr `0x5d`, INT PG07, 1024×600 |
-   | **Main I²C** (`twi_port=2`) | TWI2: PE12 SCL / PE13 SDA | likely the MFi/CarPlay bus |
-   | **JTAG** | PE4… | disabled (`jtag_enable=0`) |
-
-   Two gotchas this file reveals:
-   - **The console is 576000 baud, not 115200.** A UART adapter at the usual
-     115200 shows only garbage. Use **PB06/PB07 @ 576000 8N1**.
-   - **Pin conflict:** PB06 is declared *both* as `uart_debug_tx` and as
-     `usbc0`'s `usb_id_gpio`. The debug UART wins in practice (boot0 configures it
-     first; `usb_detect_mode=0`), but it means the vendor config is a reused
-     template — confirm on the bench. Also confirm which physical USB jack is
-     wired to USB0 (FEL needs USB0, not the host-only `usbc1`).
-
-   Extract it yourself with:
-   ```sh
-   # partition 0 of the IMAGEWTY; it's text INI
-   iconv -f GBK -t UTF-8 sys_config_nor.fex | grep -A4 -iE '\[uart_para\]|\[usbc0\]|\[twi'
-   ```
-2. **Physically, under the RF shield.** When the bench unit arrives, check how
-   easily the steel RF can comes off — the debug UART and FEL/USB test pads are
-   usually on the main PCB near the SoC, often a labeled 3–4 pad row (RX/TX/GND,
-   sometimes a boot/FEL pad). Cross-referencing the silkscreen against the
-   `sys_config` pin names should identify them without a logic analyzer.
-
-> **Bench tasks (once the unit is here):**
-> 1. `sunxi-fel version` over USB-OTG — prove the FEL link works (safest first
->    contact with the hardware).
-> 2. Pop the RF shield (note how it's attached — tabs vs. solder); photograph the
->    PCB around the SoC; look for a UART/FEL pad row.
-> 3. Extract `sys_config_nor.fex` from the stock image and match its UART/USB/GPIO
->    pin names to the pads found in step 2.
-
-## Planned feature: a GRUB-style boot selector
-
-Implemented in **u-boot** (open source, well-supported on D1/F133):
-
-- List bootable images from a FAT SD card.
-- Chainload the selected Melis image.
-
-> **No hardware buttons are wired on this board.** `sys_config` has
-> `gpadc_used=0` and `tkey_used=0` — the ADC-key and touch-key tables are
-> disabled template defaults. So the reliable power-on toggle is **"is the SD
-> card inserted?"** (the zero-code A/B above), not a button hold. A touch read
-> via the GT911 at boot is a possible alternative, but SD-insert is simplest.
-
-Milestones:
-1. **SD-insert → stock-or-SD** (no display init, no button; simplest, highest
-   value — already works at the ROM level, this just formalizes it).
-2. **Framebuffer menu** on the LCD — needs porting panel init into u-boot. The
-   panel is `he0801a068` (MIPI-DSI 4-lane, 720×1280, dclk 70 MHz, timings
-   `hbp48/ht908/hspw8 · vbp15/vt1317/vspw6`, backlight-enable PG15, PWM ch7) and
-   the full `[dram_para]`/`[lcd0]` blocks are in `sys_config_nor.fex`, so it's a
-   transcription port, not a reverse-engineer. Build into the **RISC-V** u-boot
-   and ignore the stale ARM DTB (see [hardware.md](hardware.md)).
-3. **Persisted default** via a small env partition (none exists today — it must
-   be carved).
-
-This touches the boot chain, so it is **bench-unit-only** work, done after a
-NOR dump and a confirmed FEL path.
+Implementable in u-boot (open source, supports D1/F133): list images on FAT
+storage and chainload the chosen Melis image. With no SD slot and no buttons
+(`gpadc_used=0`, `tkey_used=0`), the toggle would have to be a USB stick or a
+GT911 touch read at boot. The LCD is `he0801a068` (MIPI-DSI 4-lane, 720×1280);
+full `[lcd0]`/`[dram_para]` blocks are in `sys_config_nor.fex` for a framebuffer
+menu. This touches the boot chain: **bench unit only, after a flash backup.**

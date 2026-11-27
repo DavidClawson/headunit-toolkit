@@ -20,10 +20,9 @@ on-screen Settings UI once you have the code.
 
 ### Evidence
 
-`init.axf` is LZMA-compressed inside the MINFS app partition (three
-`LZMA_ALONE` streams, props byte `0x5d`, 32 KB dict, **no** length field and
-**no** end marker — each stream is decoded by injecting `ff×8` as the size and
-feeding it only its own bytes, sliced at the next `5d 00 80 00 00` header).
+`init.axf` is a module stored in the MINFS app partition as separately
+LZMA-compressed ELF sections (see [format-minfs.md](format-minfs.md); unpack
+with `headunit decompress`).
 The decompressed blob carries the firmware's config-descriptor table, laid out
 as repeating `<default-value>\0…\0<key-name>` records. The two password keys
 sit right next to each other:

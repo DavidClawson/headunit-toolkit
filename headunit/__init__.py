@@ -8,16 +8,17 @@ from .imagewty import ImageWTY, FileEntry
 from .minfs import MinFS, Node, checksum, write_partition
 from .datav1 import DataV1, Widget
 try:
-    from .decompress import decompress, decompress_node, is_compressed, Decoded
+    from .decompress import (decompress, decompress_node, is_compressed, Decoded,
+                             module_to_elf)
 except Exception:  # pragma: no cover - lzma may be unavailable (e.g. Pyodide/WASM)
     # Decompression is optional: the browser configurator never needs it, and
     # Pyodide's Python ships without the `lzma` module. Keep the package importable.
-    decompress = decompress_node = is_compressed = Decoded = None  # type: ignore
+    decompress = decompress_node = is_compressed = Decoded = module_to_elf = None  # type: ignore
 
 __all__ = [
     "ImageWTY", "FileEntry",
     "MinFS", "Node", "checksum", "write_partition",
     "DataV1", "Widget",
-    "decompress", "decompress_node", "is_compressed", "Decoded",
+    "decompress", "decompress_node", "is_compressed", "Decoded", "module_to_elf",
 ]
 __version__ = "0.1.0"

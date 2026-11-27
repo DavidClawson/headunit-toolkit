@@ -41,7 +41,7 @@ they're vendor material and must not be committed (see
 | decode a screen layout | ✅ `screen` |
 | **edit** a screen (move/add a widget) | ⏳ planned — record format is known |
 | retranslate / edit `*.txt` strings | ⏳ planned (UTF-16LE tab tables) |
-| LZMA decompress modules / `init.axf` | ⏳ helper planned |
+| unpack modules / `init.axf` (memory image or ELF) | ✅ `decompress [--elf]` |
 | u-boot boot selector | ⏳ designed (see boot-and-recovery.md) |
 
 ## Example: first real variant (proof that layout edits work)

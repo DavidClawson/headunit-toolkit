@@ -3,6 +3,7 @@
 *.img
 *.fex
 *.bin
+*.fw
 *.mod
 *.drv
 stock/

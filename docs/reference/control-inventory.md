@@ -64,7 +64,7 @@ controls for features that may or may not be wired here.
 The real opportunities are the **missing fields on shipped screens**, where the
 hardware is present and already feeding sibling controls:
 
-- **RadioText** — `ViewShowStrRdsRt` is referenced (`init.axf` offset 1450828,
+- **RadioText** — `ViewShowStrRdsRt` is referenced (`init.axf` vaddr `0xe9262348`,
   between `RdsPs` and `RdsEn`) and `RadioRds.data` ships. Confirmed both-halves;
   only the app-auto-fill question remains (bench test:
   `scripts/experiment_rds_radiotext.py`).
