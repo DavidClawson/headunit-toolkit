@@ -68,6 +68,13 @@ it's reverse-engineering facts and test results from a unit we own.
   PG13 RX, func 7; `mcuChip=2`), `btSerialName=/dev/uart4` (PB02 TX / PB03 RX,
   func 7; AT commands like `AT#VN030606`). Which of these carries the radio
   commands isn't confirmed yet.
+- **Listened on both from FEL** (`tools/fel/uart_sniff.py`, an edge-timestamping
+  payload at 0.2 µs resolution): silent for 5 s each, and all four lines are held
+  high externally (they stay high with the SoC's pull-down on). So the links are
+  wired but command/response: the Bluetrum speaks only when spoken to. Next is
+  reading the app's MCU protocol code and sending a harmless query.
+- **FEL CPU clock ≈ 408 MHz.** One self-inflicted hang: `xfel read32` of the
+  CLINT timer (`0x1400BFF8`) froze FEL; a power-cycle brought it back in FEL.
 - **Next:** tuner reset pin, then panel init over MIPI-DSI,
   then a boot selector with watchdog fallback. Plan in
   [boot-and-recovery.md](boot-and-recovery.md#plan-clean-sheet-firmware-with-fallback).

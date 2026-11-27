@@ -1,1 +1,2 @@
 *.elf
+.cpu_hz

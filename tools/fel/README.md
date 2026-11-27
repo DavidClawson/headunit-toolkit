@@ -14,6 +14,7 @@ the first-contact kit; the background is in
 | `backlight.sh` | Backlight test: drives PG15 (`lcd_bl_en`) and PD22 (PWM7, held high) as GPIOs. `status`, `on`, `off`, `blink [n]`. **Works** (2026-11-26). |
 | `pwm-backlight.sh` | Hardware PWM dimming on PWM7 (PD22, 50 kHz from 24 MHz / 480). `init`, `duty <0-100>`, `ramp [n]`, `status`. **Works** (2026-11-26). |
 | `i2c.c` / `i2c.py` | I2C over FEL: SRAM payload + host tool. `scan`, `read`, `write`, `gt911-id`, `gt911-touch`. **Works** (2026-11-26). |
+| `edges.c` / `uart_sniff.py` | Logic-analyser-style UART listener: timestamps every edge on an RX pin (mcycle, 0.2 µs polls), then estimates baud and decodes 8N1 on the Mac. `calibrate`, `listen uart1|uart4`. |
 | `payload.ld` | Linker script for C payloads (entry at `0x40000`, request block at `0x40F00`). |
 | `Makefile` | `make` builds `probe.bin` (load address `0x40000`). |
 
@@ -148,6 +149,19 @@ y 0→600 top to bottom (corners ≈ (90,112), (939,136), (925–955,482–505),
 720 × 1280 portrait, so it's mounted sideways and the stock firmware rotates
 the picture and scales touch to match. No reset sequence was needed: the GT911
 was already at `0x5d` at power-on.
+
+## UART listening and FEL clock (2026-11-26)
+
+- **CPU clock in FEL ≈ 408 MHz** (`uart_sniff.py calibrate`, 1e9 mcycle in 2.45 s,
+  twice). `xfel exec` returns before the payload finishes; time exec + the next
+  read together.
+- **UART1** (`mcuSerialName`, RX = PG13) and **UART4** (`btSerialName`, RX = PB03):
+  no traffic in 5 s each. All four lines (PG12/PG13/PB02/PB03) read high even
+  with the SoC's pull-down on, so they're held up externally: the link is
+  wired, but the Bluetrum only answers when the F133 talks first.
+- **Don't `xfel read32` arbitrary addresses.** Reading the CLINT timer at
+  `0x1400BFF8` hung FEL (needed a power-cycle). Probe unknown regions from
+  your own payload instead.
 
 ## Memory used
 

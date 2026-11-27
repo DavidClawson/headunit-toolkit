@@ -6,7 +6,7 @@ CFLAGS = -march=rv64gc_zicsr -mabi=lp64d -mcmodel=medany -Os -ffreestanding \
 
 .PRECIOUS: %.elf
 
-all: probe.bin i2c.bin
+all: probe.bin i2c.bin edges.bin
 
 probe.elf: probe.S
 	$(CROSS)gcc $(CFLAGS) -Wl,-Ttext=$(LOAD) -Wl,--build-id=none -Wl,--no-warn-rwx-segments -o $@ $<
