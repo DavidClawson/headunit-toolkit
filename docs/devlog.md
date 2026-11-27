@@ -23,7 +23,17 @@ it's reverse-engineering facts and test results from a unit we own.
   normally.
 - **Side note:** the pre-FEL backup differed from the 11-25 `after.bin` only
   from `0xf20000` up (UDISK settings), as expected after normal use.
-- **Next:** hardware-mapping test programs loaded over FEL (backlight first),
+- **Backlight lit from FEL** (second session, same day): `tools/fel/backlight.sh`
+  drove PG15 (`lcd_bl_en`) and PD22 (PWM7) high as plain GPIOs; the screen lit
+  and blinked on command. The `sys_config` `[lcd0]` pins are right, and no extra
+  power rail was needed. First try used the wrong offset for PD_CFG2 (wrote
+  PD_DRV1); fixed.
+- **Hardware PWM dimming works:** `tools/fel/pwm-backlight.sh` opened the PWM
+  bus clock (`0x020017AC`), set channel 7 to 24 MHz / 480 = 50 kHz active-high,
+  switched PD22 to function 5, and swept the duty 0 → 100 → 0. The backlight
+  dimmed smoothly. Register layout matches Linux `pwm-sun20i.c`, so the
+  D1-family drivers can be reused for this board.
+- **Next:** more hardware-mapping tests over FEL (panel init over MIPI-DSI, touch),
   then a boot selector with watchdog fallback. Plan in
   [boot-and-recovery.md](boot-and-recovery.md#plan-clean-sheet-firmware-with-fallback).
 

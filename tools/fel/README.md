@@ -11,6 +11,8 @@ the first-contact kit; the background is in
 | `fel-enter.sh` | Backs up the chip twice (must match), then erases **only the first 4 KB** (boot0's `eGON.BT0` header) so the BootROM falls through to FEL. |
 | `fel-exit.sh` | Writes that 4 KB back from the same backup, reads the whole chip and confirms it matches. |
 | `probe.S` | First test program: reads CPU ID registers, times a loop, bumps a run counter, writes `0x600DF00D`, returns to FEL. Touches no peripherals. |
+| `backlight.sh` | Backlight test: drives PG15 (`lcd_bl_en`) and PD22 (PWM7, held high) as GPIOs. `status`, `on`, `off`, `blink [n]`. **Works** (2026-11-26). |
+| `pwm-backlight.sh` | Hardware PWM dimming on PWM7 (PD22, 50 kHz from 24 MHz / 480). `init`, `duty <0-100>`, `ramp [n]`, `status`. **Works** (2026-11-26). |
 | `Makefile` | `make` builds `probe.bin` (load address `0x40000`). |
 
 Both scripts use the Pico + SOIC-8 clip setup from the recovery doc and refuse
@@ -92,6 +94,34 @@ A second `exec` without reloading gave runs=2. About 5 cycles per loop pass
 suggests caches are off in FEL (xfel's own payloads switch them on at entry).
 `xfel spinor` found the 16 MB chip and read at about 400 KB/s. The header was
 restored over USB, a full read matched the backup, and the unit booted normally.
+
+## Backlight (2026-11-26)
+
+`tools/fel/backlight.sh on` lit the backlight from FEL and `blink` toggled it,
+confirming the `sys_config` `[lcd0]` pin map: **PG15 = backlight enable, PD22
+(PWM7) = brightness**, both active high, with no other power rail needing to be
+switched on first. The panel isn't initialised, so the screen glows with no picture.
+
+GPIO register layout on the F133 (base `0x02000000`, `0x30` per port): CFG0–3 at
+`+0x00..0x0C`, DAT at `+0x10`, DRV at `+0x14..`, PULL at `+0x24..`. (The first
+attempt used `+0x18` for PD_CFG2, which is actually PD_DRV1; harmless, but nothing lit.)
+
+## PWM dimming (2026-11-26)
+
+`tools/fel/pwm-backlight.sh init` then `ramp` dimmed the backlight smoothly up
+and down. The register layout from Linux's `pwm-sun20i.c` is right for the F133:
+
+```
+CCU PWM_BGR 0x020017AC = 0x00010001   bus gate + reset de-assert (was 0 in FEL)
+PCCR67      0x02000C2C = 0x00000000   24 MHz HOSC, no divide
+PCGR        0x02000C40 = 0x00000080   ch7 clock gate
+PER         0x02000C80 = 0x00000080   ch7 enable
+PCR7        0x02000DE0 = 0x00000100   prescale /1, active high
+PPR7        0x02000DE4 = 0x01df00f0   480-cycle period (50 kHz), 240 active (50%)
+PD22 function 5 = PWM7
+```
+
+Duty changes written to PPR7 take effect while the channel runs.
 
 ## Memory used
 
