@@ -719,3 +719,31 @@ program into the boot firmware (`tools/fel/dram/tuner.c`, `radio_ui.c`):
 - **Tested:** colour and brightness came back after power cycles. 51 KB of 60.
 - **Next:** auto brightness from the illumination (headlight) wire, once its MCU
   frame is found; the stock config has day/night levels (90/40).
+
+**F133 audio out, with DMA (2026-11-27).**
+- **Routing:** the F133's only analog output is its headphone driver (HPOUTL/R),
+  which feeds **BD3702 input 0**. Stock uses `armChannelA=0` and
+  `mediaChannelA=0`, even though `sys_config` says `codec_used=0`.
+- **Clock:** PLL_AUDIO1 3072 MHz → /5 → /25 = 24.576 MHz DAC clock, FS /512 =
+  48 kHz.
+- **Registers:** from the Linux D1 codec driver (`sun20i-codec.c`,
+  smaeul/linux), `sun6i-dma.c` and `ccu-sun20i-d1.c`.
+- **`audtest.c`:** the first tones, fed to the FIFO by hand. Recorded from the
+  iMic: 440.0 / 1000.0 Hz exact, both channels, 600,000 frames in 12.5 s.
+- **`audio.c`:**
+  - DMA channel 0 loops forever over two descriptors, one per half of an
+    8192-frame ring, to the codec FIFO (DRQ 7). It uses no interrupts.
+  - `audio_service()` reads the channel's current source address and refills
+    about 100 ms ahead, then cleans the D-cache (it's write-back).
+  - A 4-voice mixer for beeps and clicks, with 3 ms soft edges.
+- **`dmatest.c`:** with the loop stalling a random 0–80 ms between services,
+  there were 0 underruns. The 1 kHz tone held steady to within 2 % with no
+  dropouts, and the notes and clicks had the right lengths.
+- **Quirk:** about 1.2 s of silence after power-up. It's the headphone driver's
+  anti-pop ramp.
+- **Gotcha:** sox on the iMic writes 32-bit samples under a 16-bit WAV header,
+  so read recordings as int32 stereo.
+- **Next:** the BD3702 *switches* inputs and doesn't mix them, so a UI click
+  over the radio or Bluetooth needs a mixing input, if the chip has one, or a
+  brief switch. Clicks are easy where the F133 is the source (home screen,
+  games).
