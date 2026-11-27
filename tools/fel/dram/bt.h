@@ -13,8 +13,12 @@ typedef struct {
 	char title[64], artist[64], album[64];   /* ASCII (accents folded, others '?') */
 	unsigned pos, len;      /* seconds */
 	uint32_t pos_ms;        /* millis() when pos arrived, to run the clock between updates */
+	int call;               /* BT_CALL_* */
+	char number[32];        /* caller / callee */
+	uint32_t call_ms;       /* millis() when the call was answered */
 } bt_state;
 
+enum { BT_CALL_NONE, BT_CALL_RINGING, BT_CALL_OUTGOING, BT_CALL_ACTIVE };
 extern bt_state bt;
 
 void bt_init(void);
@@ -24,3 +28,6 @@ void bt_cmd(const char *c); /* sends AT#c\r\n */
 #define bt_pause() bt_cmd("MA")
 #define bt_next()  bt_cmd("MD")
 #define bt_prev()  bt_cmd("ME")
+#define bt_answer() bt_cmd("CE")
+#define bt_reject() bt_cmd("CF")
+#define bt_hangup() bt_cmd("CG")

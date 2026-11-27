@@ -35,6 +35,7 @@ int  tuner_poll(void);              /* 1 when tuner.* changed; 2 when a tune/see
 #define SOUND_IN_RADIO 0x0B         /* BD3702 input select (register 0x05) */
 #define SOUND_IN_BT    0x0A
 extern int snd_vol, snd_muted;      /* 1..SOUND_MAX; muted flag */
+extern uint8_t snd_input;           /* current BD3702 input */
 void sound_init(void);              /* once: BD3702 table, volume applied */
 void sound_input(uint8_t in);
 void sound_apply(void);             /* write snd_vol / snd_muted */

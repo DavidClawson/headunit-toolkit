@@ -659,3 +659,21 @@ program into the boot firmware (`tools/fel/dram/tuner.c`, `radio_ui.c`):
     volume is shared (`sound_*` in `tuner.c`).
   - At boot the firmware sets the key LEDs to white.
   - Titles are folded to ASCII for our fonts (é → e, other characters → `?`).
+
+**Bluetooth phone calls (2026-11-27).** `call_ui.c`:
+- **What happens:** an incoming call pops up over any page with the caller's
+  number and Answer / Decline. In a call it shows a timer and Hang up; the knob
+  push answers or hangs up and the knob turn sets volume.
+- **Tested with a real call:** ring, answer on the unit, two-way audio, hang up
+  from the unit.
+- **Audio:** call audio uses the same BD3702 input as music (`0x0A`), with no
+  MCU source command. The ringtone comes through too (in-band).
+- **Mic:** the wired mic feeds the WB020 directly, so our code does nothing for
+  it. The caller reported it sounded a bit muffled: narrowband HFP audio plus a
+  cheap mic. Echo cancel and mic gain are for later.
+- **If the call is answered on the phone,** an iPhone keeps the audio on its
+  earpiece until "CAR BT" is chosen as the output.
+- **Module lines:** `ID<num>` ringing, `IC<num>` dialling, `IG` active, `IF`
+  ended; `CE` answer, `CF` reject, `CG` hang up.
+- `calltest.c` (auto-answer, source command, input sweep) is kept for future
+  call debugging.
