@@ -6,6 +6,29 @@ it's reverse-engineering facts and test results from a unit we own.
 
 ---
 
+## 2026-11-26 — FEL over the front USB port works; clip-free recovery verified
+
+- **Why:** hand-soldering to the 0.4 mm UART legs was doing more harm than good
+  (bridges cleared with braid; unit boots again). New approach: a USB link to the
+  SoC for bring-up, then a clean-sheet firmware with a watchdog fallback.
+- **Entering FEL:** `tools/fel/fel-enter.sh` backed up the chip with the clip
+  (two matching reads) and erased only the first 4 KB (boot0 header). Unit
+  powered with the front USB port cabled to the Mac (VBUS cut).
+- **Result:** `AWUSBFEX ID=0x00185900(D1/F133)` 9 s after power-on, so the front
+  port reaches USB0 directly. `probe.bin` ran from SRAM at `0x40000` and returned
+  to FEL twice (T-Head `mvendorid` `0x5b7`, hart 0, `misa` `0x8000000000b4112d`).
+  `xfel spinor` reads the flash at about 400 KB/s.
+- **Recovery without the clip:** boot0 header written back with
+  `xfel spinor write`, full 16 MB read over USB matched the backup, unit booted
+  normally.
+- **Side note:** the pre-FEL backup differed from the 11-25 `after.bin` only
+  from `0xf20000` up (UDISK settings), as expected after normal use.
+- **Next:** hardware-mapping test programs loaded over FEL (backlight first),
+  then a boot selector with watchdog fallback. Plan in
+  [boot-and-recovery.md](boot-and-recovery.md#plan-clean-sheet-firmware-with-fallback).
+
+---
+
 ## 2026-11-25 — hello.mod bricked the bench unit; recovered with a SPI clip
 
 - **What happened:** the first `hostmod` test image (`hello.mod` in the

@@ -257,21 +257,58 @@ normal boot path (boot0 loads Melis directly). It's used for "sprite" flashing
 There is **no `env` partition** (commented out of the config), so a boot selector
 that remembers a default would have to carve one.
 
-## FEL (USB recovery, not yet validated here)
+## FEL (USB recovery, verified 2026-11-26)
 
 FEL is the BootROM's USB device mode, entered when no valid boot code is found.
-It needs the SoC's **USB0** (pins 114/115 on the F133). On the W022 the USB jack
+It uses the SoC's **USB0** (pins 114/115 on the F133). On the W022 the USB jack
 is on a **daughterboard** (4-wire red/white/green/black cable to the mainboard,
-its own QFN chip `U2`, footprints for USB-A and USB-C). Whether that port goes to
-USB0 directly or through a hub is unknown. Both controllers are configured as
-host in `sys_config`, which doesn't matter in FEL (the ROM uses USB0 as a device).
+its own QFN chip `U2`, footprints for USB-A and USB-C). **The front USB port
+reaches USB0 directly:** FEL enumerates through it, so `U2` isn't a hub in the
+way. Both controllers are configured as host in `sys_config`, which doesn't
+matter in FEL (the ROM uses USB0 as a device).
 
-To test: with the clip on, briefly ground flash pin 2 (DO) or pull CS (pin 1)
-high at power-on so boot0 can't load, and see whether the Mac enumerates an
-Allwinner FEL device (`1f3a:efe8`) on an A-to-A/A-to-C cable. **Cut or skip VBUS
-on that cable** (both sides supply 5 V). If it works, `xfel` can write the flash
-over USB, and a button wired across those pins would give **recovery with the
-case closed**.
+**How to get in: [`tools/fel/`](../tools/fel/README.md).** Instead of shorting
+flash pins at power-on, it uses the clip to erase only the first 4 KB (boot0's
+`eGON.BT0` header), so the BootROM finds nothing to boot and drops into FEL
+every time. Connect the front port to the Mac with an A-to-A/A-to-C cable with
+**VBUS cut** (both sides supply 5 V) and power on; the screen stays dark.
+
+**Bench result (2026-11-26):**
+
+- The Mac saw `1f3a:efe8` 9 s after power-on: `xfel version` →
+  `AWUSBFEX ID=0x00185900(D1/F133)`.
+- A test program (`tools/fel/probe.bin`) loaded at `0x40000`, ran and returned
+  to FEL, twice: T-Head `mvendorid` `0x5b7`, hart 0,
+  `misa` `0x8000000000b4112d` (RV64 IMAFDC + S/U + V + X).
+- `xfel spinor` read the flash at about 400 KB/s (16 MB in about 40 s), matching
+  the clip dump.
+- **The boot0 header was put back over USB** (`xfel spinor write 0 hdr4k.bin`),
+  a full 16 MB read over USB matched the backup byte for byte, and the unit
+  booted normally. So once in FEL, recovery needs no clip.
+
+What this gives:
+
+- `xfel` can load and run code in SRAM/DRAM and read memory back, a test loop
+  that never writes the flash. That's the basis for working out the board's
+  hardware (pins, clocks, display, touch) with small test programs, starting from
+  the pin map in `sys_config_nor.fex`.
+- `xfel spinor` can read and write the flash over USB, without the clip.
+- As long as FEL works the unit can't be bricked for good: a bad boot0 just
+  lands back in FEL.
+
+### Plan: clean-sheet firmware with fallback
+
+1. **FEL first contact** (above): load → run → read-back with `probe.bin`. **Done.**
+2. **Map the hardware from RAM**: test programs that confirm the backlight,
+   LCD (`he0801a068`, MIPI-DSI), GT911 touch, and UART pins from `sys_config`.
+   Build on the existing open D1s work (xboot, RT-Thread, mainline U-Boot/Linux)
+   rather than from nothing.
+3. **Boot selector with watchdog fallback**: keep the stock boot0. The selector
+   sets a "trying experimental" flag in a register that survives reset, arms the
+   hardware watchdog, and boots the experimental image. A hang resets the unit,
+   the selector sees the flag and boots stock. FEL and then the clip stay as the
+   backstops.
+4. **Clean stock → new firmware tests** once the above is proven on the bench.
 
 ## Other board notes (bench unit, opened 2026-11-24)
 
