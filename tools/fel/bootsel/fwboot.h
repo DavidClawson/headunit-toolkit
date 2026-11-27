@@ -23,6 +23,8 @@
 #define GP5_TRYING     0x7E57B007            /* set by sel before the jump; fw clears it once up */
 #define GP5_STOCK1     0x57C0B007            /* "boot stock once": set by fw, consumed by sel */
 
+#define WDT_CTRL       0x020500B0            /* write WDT_RELOAD to restart the count */
+#define WDT_RELOAD     ((0xA57 << 1) | 1)
 #define WDT_CFG        0x020500B4
 #define WDT_MODE       0x020500B8
 #define WDT_KEY        0x16AA0000

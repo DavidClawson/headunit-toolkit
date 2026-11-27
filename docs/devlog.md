@@ -506,3 +506,8 @@ selector's watchdog and the unit boots stock; an image with a broken checksum
 is skipped (stock straight away); the status-bar hold boots stock once. The
 bench unit now boots our firmware by default, with stock always one gesture
 away and the FEL window still first on every boot.
+
+**Watchdog petting:** the firmware now restarts the selector's 8 s watchdog
+from its main loop instead of disarming it. No spurious resets in normal use;
+a deliberate freeze (Settings page, phone key) restarts the unit back into our
+firmware. Hangs at startup still fall back to stock.

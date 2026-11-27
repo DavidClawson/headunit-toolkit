@@ -7,6 +7,8 @@
  *   tap a tile: open it                 "< Back" (or knob push) on a page: return
  *   phone key: banner for 2 s
  *   hold the status bar 3 s: reboot into stock firmware once (fw.c)
+ *   phone key on the Settings page: deliberate freeze, to test that the
+ *   watchdog (petted every loop pass when booted from NOR) restarts us
  *
  * Under FEL it runs 60 s and returns:   felrun.py dram/app.bin --timeout 120
  * As boot firmware (mkfw.py app.bin -> NOR 0x120000) it runs forever.
@@ -72,7 +74,8 @@ static void draw(void)
 		gfx_text(BACK_X + 36, BACK_Y + 20, "< Back", &font16x32, 1, 0xffffff);
 		const char *n = home_tile_name(st.page);
 		gfx_text((GW - gfx_text_w(n, &font16x32, 3)) / 2, 260, n, &font16x32, 3, 0xffffff);
-		const char *m = "nothing here yet: knob push or Back to return";
+		const char *m = st.page == 3 ? "phone key here = freeze test (watchdog restarts us)"
+		                             : "nothing here yet: knob push or Back to return";
 		gfx_text((GW - gfx_text_w(m, &font8x16, 1)) / 2, 400, m, &font8x16, 1, 0xc8d4ec);
 	}
 	if (now_ms() < st.banner_until) {
@@ -103,6 +106,19 @@ static void describe(const event *e)
 	p = str_cat(p, "   at "); p = str_u(p, e->ms); str_cat(p, " ms");
 }
 
+static void freeze_test(void)
+{
+	uint32_t fb = display_fb();
+	gfx_target(fb);
+	gfx_fill(0, GH / 2 - 60, GW, 120, 0x8a1010);
+	const char *m = fw_booted() ? "Freeze test: the watchdog should restart us in ~8 s"
+	                            : "Freeze test (under FEL: no watchdog, returning)";
+	gfx_text((GW - gfx_text_w(m, &font16x32, 1)) / 2, GH / 2 - 16, m, &font16x32, 1, 0xffffff);
+	logf("app: freeze test\n");
+	if (!fw_booted()) return;
+	for (;;) ;
+}
+
 /* returns 1 if the screen needs redrawing */
 static int handle(const event *e)
 {
@@ -112,6 +128,7 @@ static int handle(const event *e)
 		if (e->key == MCU_KEY_CW && home) st.focus = (st.focus + 1) % HOME_TILES;
 		else if (e->key == MCU_KEY_CCW && home) st.focus = (st.focus + HOME_TILES - 1) % HOME_TILES;
 		else if (e->key == MCU_KEY_KNOB) st.page = home ? st.focus : -1;
+		else if (e->key == MCU_KEY_PHONE && st.page == 3) freeze_test();
 		else if (e->key == MCU_KEY_PHONE) st.banner_until = now_ms() + 2000;
 		return 1;
 	case EV_TOUCH_DOWN:
@@ -158,6 +175,7 @@ int main(void)
 	unsigned events = 0, redraws = 0, worst = 0, logged = 0;
 	uint32_t t0 = ticks();
 	while (nor || ticks() - t0 < SECONDS * 1000000u * TICKS_PER_US) {
+		fw_pet();
 		event e;
 		while (input_next(&e)) {
 			events++;

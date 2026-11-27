@@ -386,6 +386,14 @@ boot0 after the FEL window (from the disassembly): DRAM init `0x27998`
   | `bad.fw` (app with one byte flipped after checksumming) | **stock** straight away, no red screen |
   | `app.fw` restored | ours again |
 
+  | Freeze mid-session (Settings page, phone key) | watchdog restarts the unit after ~8 s, back into **ours** |
+
+  The firmware pets the selector's 8 s watchdog every main-loop pass
+  (`fw_pet()`: `WDT_CTRL` `0x020500B0` = `0xA57 << 1 | 1`, as Linux's D1 driver)
+  instead of disarming it. `fw_boot_ok()` clears GP5, so after startup a hang
+  is no longer a boot failure: the unit heals itself into ours, while a hang
+  *during* startup still falls back to stock.
+
   `fw-write.sh` erases the whole slot before writing and refuses images that
   fail the selector's checks (`ALLOW_BAD=1` for this kind of test).
 
