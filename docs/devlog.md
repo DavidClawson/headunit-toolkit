@@ -511,3 +511,16 @@ away and the FEL window still first on every boot.
 from its main loop instead of disarming it. No spurious resets in normal use;
 a deliberate freeze (Settings page, phone key) restarts the unit back into our
 firmware. Hangs at startup still fall back to stock.
+
+**Amp standby pin: not an F133 GPIO, as far as the firmware shows.**
+`sys_config`'s only amp pin is the generic template's `gpio-spk = PH9` under
+`[codec]` with `codec_used = 0` (the F133 has no port H; the internal codec is
+unused). The stock app's configurable GPIO keys (all listed in `init.axf`:
+`radioPowerGpio`, `antPowerGpio`, `subwoofGpio1/2`, `frontPowerGpio`, …) have no
+amp or mute pin, and the app mutes through `CSystemSetup_MuteOn`. The unit's
+`Config.ini` uses GPIO numbers 318/319 (`usb0PowerGpio`, `frontAuxSwitchGpio`),
+above the F133's range, which points to pins on the AB5301 MCU (`mcuChip=2`).
+Likely conclusion: the MCU owns amp standby and mute, so controlling them
+means sending MCU commands (we are listen-only so far). Next evidence: the amp
+chip's marking, and the mute frame stock sends the MCU (from `init.axf`
+  around `CSystemSetup_MuteOn`; we can't watch stock's UART TX live).
