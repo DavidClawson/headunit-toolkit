@@ -30,7 +30,7 @@ bench unit, it says so.
 - **App:** one stripped RISC-V binary, `init.axf` (2,081,328 bytes; three
   concatenated raw-LZMA1 blocks inside MINFS — see
   [format-minfs.md](format-minfs.md)), built against the Melis exported API.
-- **DRAM:** 512 MiB DDR3 @ 528 MHz (base `0x4000_0000`); CPU @ ~1008 MHz. The
+- **DRAM:** **64 MB** (the F133's built-in DDR2, base `0x4000_0000`; tested with `memtest`). `sys_config` says 512 MiB DDR3 @ 528 MHz, a template value (see [hardware-audit.md](hardware-audit.md)); CPU @ ~1008 MHz. The
   full `[dram_para]` block is in `sys_config_nor.fex`, reusable for a D1s DRAM
   init if we ever rebuild the boot chain.
 - **Boot integrity is a checksum only — no secure boot.** boot0 ships as a plain
