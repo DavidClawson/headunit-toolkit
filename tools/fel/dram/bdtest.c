@@ -1,0 +1,26 @@
+/* bdtest.c: BD3702 sound processor (TWI2 0x40) only: the app's init table,
+   input 0x05 = 0x0B (radio channel), volume 0x20 = 0x8A (-10 dB). */
+#include "lib.h"
+#include "twi.h"
+static const uint8_t bd_init[][2] = {
+	{0x01,0xF4},{0x02,0x03},{0x03,0x19},{0x05,0x00},{0x06,0x06},{0x20,0x00},
+	{0x28,0x80},{0x29,0x80},{0x2A,0x80},{0x2B,0x80},{0x2C,0xFF},{0x30,0xFF},
+	{0x41,0x00},{0x44,0x00},{0x47,0x00},{0x51,0x00},{0x54,0x00},{0x57,0x00},
+	{0x75,0x7F},{0x90,0x30},{0x05,0x0B},{0x20,0x8A},
+};
+int main(void)
+{
+	log_reset();
+	twi_init(2);
+	unsigned bad = 0;
+	for (unsigned i = 0; i < sizeof bd_init / sizeof bd_init[0]; i++)
+		if (twi_write(2, 0x40, bd_init[i][0], 1, &bd_init[i][1], 1)) bad++;
+	logf("BD3702: %u writes, %u failed\n", (unsigned)(sizeof bd_init / sizeof bd_init[0]), bad);
+	udelay(3000000);                      /* host starts recording */
+	for (uint8_t in = 0; in < 16; in++) {  /* 2 s per input, then back to radio */
+		twi_write(2, 0x40, 0x05, 1, &in, 1);
+		udelay(2000000);
+	}
+	uint8_t r = 0x0B; twi_write(2, 0x40, 0x05, 1, &r, 1);
+	return 0;
+}

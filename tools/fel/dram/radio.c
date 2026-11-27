@@ -99,11 +99,18 @@ int main(void)
 	logf("1. MCU: A0 (init), then source = Radio (A7 04 00)\n");
 	uart_init(1, 115200);
 	while (uart_getc(1) >= 0) ;
-	mcu_send(0xA0, 0, 0);
-	mcu_listen(1000);
-	static const uint8_t src[2] = { 0x04, 0x00 };
-	mcu_send(0xA7, src, 2);
-	mcu_listen(2000);
+	/* the app's start-up list (init.axf 0xe92742c8), minus B3 (skipped when
+	   bArmRadio=1), then its final A7 [0F 00], then source = Radio */
+	static const uint8_t b7[1] = { 0x02 }, a7f[2] = { 0x0F, 0x00 }, src[2] = { 0x04, 0x00 };
+	static const uint8_t ce[5] = { 0xCE, 0x01, 0x00, 0x00, 0x00 };
+	logf(" A4\n"); mcu_send(0xA4, 0, 0);   mcu_listen(300);
+	logf(" A0\n"); mcu_send(0xA0, 0, 0);   mcu_listen(1000);
+	logf(" B7 02\n"); mcu_send(0xB7, b7, 1); mcu_listen(300);
+	logf(" C3\n"); mcu_send(0xC3, 0, 0);   mcu_listen(500);
+	logf(" BA\n"); mcu_send(0xBA, 0, 0);   mcu_listen(300);
+	logf(" A7 0F 00\n"); mcu_send(0xA7, a7f, 2); mcu_listen(300);
+	logf(" B0 CE 01 (likely heartbeat reply)\n"); mcu_send(0xB0, ce, 5); mcu_listen(300);
+	logf(" A7 04 00 (radio)\n"); mcu_send(0xA7, src, 2); mcu_listen(3000);
 
 	logf("2. scan\n");
 	twi_init(1);
@@ -118,7 +125,7 @@ int main(void)
 	wr32(0x02000040, rd32(0x02000040) | (1u << 5));
 	udelay(50000);
 	scan(1);
-	for (int i = 0; i < 20 && twi_write(1, SI, 0, 0, 0, 0) != TWI_OK; i++) udelay(100000);
+	for (int i = 0; i < 50 && twi_write(1, SI, 0, 0, 0, 0) != TWI_OK; i++) udelay(100000);
 	static const uint8_t pu[3] = { 0x01, 0xD0, 0x05 };
 	int e = si_cmd(pu, 3, 0, 0);
 	logf("  POWER_UP: %d\n", e);
