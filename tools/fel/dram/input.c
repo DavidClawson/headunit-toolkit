@@ -18,12 +18,12 @@ static void push(uint8_t type, uint8_t key, int x, int y)
 	if (qt - qh >= QN) return;                       /* full: drop */
 	event *e = &q[qt++ % QN];
 	e->type = type; e->key = key; e->x = (int16_t)x; e->y = (int16_t)y;
-	e->ms = (ticks() - t_start) / (1000 * TICKS_PER_US);
+	e->ms = millis() - t_start;
 }
 
 int input_init(void)
 {
-	t_start = ticks();
+	t_start = millis();
 	mcu_init();
 	char id[5]; uint16_t fw;
 	touch_ok = gt911_init(id, &xmax, &ymax, &fw) == 0 && xmax && ymax;

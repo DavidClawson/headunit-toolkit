@@ -55,8 +55,9 @@ unit's own flash**:
   fonts, rendered on the device.
 - **Input:** GT911 touch over I2C, and the rotary knob/keys via the front-panel
   MCU (Bluetrum AB5301) over UART, all in one event loop.
-- **FM radio:** Si4730 tuner and BD3702 sound processor driven from our code;
-  signal strength, SNR and stereo readback.
+- **FM radio:** a Radio page (tune, seek, scan into a station list, favorites,
+  signal meter, volume on the knob) driving the Si4730 tuner and BD3702 sound
+  processor directly.
 - **Boot selector:** a small patch to boot0 loads our image from NOR
   `0x120000`, checks it, and starts it under a watchdog.
 
@@ -74,8 +75,8 @@ hardware:
 **FM radio now plays from our own code.** The tuner (an Si4730) sits on an I2C
 bus the stock kernel bit-bangs in software (PG14/PB4), which is why it hid from
 every hardware scan. The story is in [issue #2](https://github.com/DavidClawson/headunit-toolkit/issues/2)
-and [`docs/devlog.md`](docs/devlog.md). Still to come: a radio screen in the firmware
-(tuning, signal meter, scan), the amp's standby control, and CarPlay/Android Auto
+and [`docs/devlog.md`](docs/devlog.md). Since then it has a proper Radio page. Still to come: saved settings, the
+amp's standby control, and CarPlay/Android Auto
 ([`docs/strategy.md`](docs/strategy.md)). Help is welcome:
 see the [open issues](https://github.com/DavidClawson/headunit-toolkit/issues).
 
