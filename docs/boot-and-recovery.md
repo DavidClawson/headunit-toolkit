@@ -328,7 +328,7 @@ What this gives:
    is now only the backstop. Details: `tools/fel/README.md`.
 4. **Clean stock → new firmware tests** once the above is proven on the bench.
 
-### Plan: boot our firmware from the NOR (agreed 2026-11-26; steps 1–2 done)
+### Booting our firmware from the NOR (agreed 2026-11-26; steps 1–3 done: **it boots**)
 
 boot0 after the FEL window (from the disassembly): DRAM init `0x27998`
 ("dram size"), debug-key checks, clear `0x40800000`, then **`0x28d3c: jal
@@ -370,6 +370,13 @@ boot0 after the FEL window (from the disassembly): DRAM init `0x27998`
   image is inert under boot0 v1. `xfel spinor` works in caught-FEL sessions
   (detect, read, 4 KB-granular erase/write); one early failure was the USB link
   dropping for a moment right after a catch, which `fw-write.sh` now waits out.
+- **Step 3, done (2026-11-26):** boot0 v2 (`bootsel/boot0-fw.bin`) written
+  with `tools/fel/boot0-write.sh` (refuses unless the flash holds a boot0 it
+  knows; saved the old area to `stock/nor/boot0-area-before-*.bin`; verified the
+  48 KB and that `0xC000`–`0x10000` is unchanged). **On power-up the unit boots
+  our firmware from its own flash**: FEL window → selector → `app.fw` → our home
+  screen, "NOR" in the status bar. Rollback: catch, then
+  `tools/fel/boot0-write.sh stock/nor/boot0-felwin-v1.bin`.
 - **Not pursued:** calling boot0's flash driver from a DRAM program under FEL
   (to prove the calling convention early) hung the FEL session twice, and the
   watchdog armed by the test never fired, so the program probably finished and

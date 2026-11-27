@@ -495,3 +495,8 @@ Tested under FEL: the hold counts down, cancels on lift, and reboots into
 stock. Also learned: calling boot0's flash driver from a FEL session hangs the
 USB link, and RTC GP registers don't survive a power cycle. Nothing written to
 the flash yet.
+
+**It boots.** boot0 v2 written (`boot0-write.sh`, verified, the 16 KB after
+boot0 untouched). Power on → BROM → boot0 → FEL window → selector → our image
+at `0x120000` → our home screen with "NOR" in the status bar. No Mac, no FEL:
+the unit runs our firmware from its own flash.
