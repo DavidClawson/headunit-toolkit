@@ -35,7 +35,38 @@ int mcu_poll(mcu_frame *f)
 
 int mcu_key(const mcu_frame *f)
 {
-	return (f->cmd == 0xB2 && f->len == 6) ? f->data[1] : -1;
+	if (f->cmd != 0xB2 || f->len != 6 || f->data[1] == 0xCE || f->data[1] == 0xFE) return -1;
+	return f->data[1];
+}
+
+/* 81 B2 [00 CE ..] = keep-alive ping: answer B0 [CE 00 00 00 00] (as the stock app's
+   key forwarder does). 81 B2 [00 FE 00 00 t m] = the key LED setting echoed back. */
+int mcu_service(const mcu_frame *f)
+{
+	if (f->cmd != 0xB2 || f->len != 6) return 0;
+	if (f->data[1] == 0xCE) {
+		static const uint8_t pong[5] = { 0xCE, 0, 0, 0, 0 };
+		mcu_send(0xB0, pong, 5);
+		return 1;
+	}
+	if (f->data[1] == 0xFE) { logf("mcu: key LED now mode %u\n", f->data[5]); return 1; }
+	return 0;
+}
+
+void mcu_start(void)
+{
+	static const uint8_t b7[1] = { 0x02 }, a7[2] = { 0x0F, 0x00 }, up[5] = { 0xCE, 0x01, 0, 0, 0 };
+	static const struct { uint8_t cmd, len; const uint8_t *d; } seq[] = {
+		{ 0xA4, 0, 0 }, { 0xA0, 0, 0 }, { 0xB7, 1, b7 }, { 0xC3, 0, 0 }, { 0xBA, 0, 0 },
+		{ 0xA7, 2, a7 }, { 0xB0, 5, up },
+	};
+	for (unsigned i = 0; i < sizeof seq / sizeof seq[0]; i++) {
+		mcu_send(seq[i].cmd, seq[i].d, seq[i].len);
+		uint32_t t0 = millis();
+		mcu_frame f;
+		while (millis() - t0 < (seq[i].cmd == 0xA0 ? 600u : 150u))    /* let it answer; keep pings answered */
+			if (mcu_poll(&f)) mcu_service(&f);
+	}
 }
 
 void mcu_send(uint8_t cmd, const void *data, unsigned len)

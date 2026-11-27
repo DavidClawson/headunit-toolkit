@@ -10,3 +10,4 @@ int  display_up(uint32_t fb);    /* bring everything up scanning fb; no-op if ru
 void display_flip(uint32_t fb);  /* scan out fb from the next frame; waits for it */
 int  display_vblank_wait(void);  /* wait for the next frame end (TCON TRI_FINISH); -1 on timeout */
 uint32_t display_fb(void);       /* buffer being scanned out */
+void display_brightness(int level);   /* 1..10: backlight PWM (PD22 = PWM7) */

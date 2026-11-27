@@ -9,8 +9,8 @@
  *   Radio page: see radio_ui.c (knob push switches the knob mode there; Back leaves)
  *   Bluetooth page: see bt_ui.c (knob = volume, push = play/pause; Back leaves)
  *   hold the status bar 3 s: reboot into stock firmware once (fw.c)
- *   phone key on the Settings page: deliberate freeze, to test that the
- *   watchdog (petted every loop pass when booted from NOR) restarts us
+ *   Settings page: see settings_ui.c (button colour, brightness, reboot to
+ *   stock, and the watchdog freeze test)
  *
  * Under FEL it runs 60 s and returns:   felrun.py dram/app.bin --timeout 120
  * As boot firmware (mkfw.py app.bin -> NOR 0x120000) it runs forever.
@@ -27,6 +27,7 @@
 #include "bt_ui.h"
 #include "call_ui.h"
 #include "settings.h"
+#include "settings_ui.h"
 #include "tuner.h"
 
 #ifndef SECONDS
@@ -86,11 +87,11 @@ static void draw(void)
 		gfx_text(BACK_X + 36, BACK_Y + 20, "< Back", &font16x32, 1, 0xffffff);
 		if (st.page == 0) radio_draw(st.pressed);
 		else if (st.page == 1) bt_ui_draw(st.pressed);
+		else if (st.page == 3) settings_ui_draw(st.pressed);
 		else {
 			const char *n = home_tile_name(st.page);
 			gfx_text((GW - gfx_text_w(n, &font16x32, 3)) / 2, 260, n, &font16x32, 3, 0xffffff);
-			const char *m = st.page == 3 ? "phone key here = freeze test (watchdog restarts us)"
-			                             : "nothing here yet: knob push or Back to return";
+			const char *m = "nothing here yet: knob push or Back to return";
 			gfx_text((GW - gfx_text_w(m, &font8x16, 1)) / 2, 400, m, &font8x16, 1, 0xc8d4ec);
 		}
 	}
@@ -124,18 +125,6 @@ static void describe(const event *e)
 	p = str_cat(p, "   at "); p = str_u(p, e->ms); str_cat(p, " ms");
 }
 
-static void freeze_test(void)
-{
-	uint32_t fb = display_fb();
-	gfx_target(fb);
-	gfx_fill(0, GH / 2 - 60, GW, 120, 0x8a1010);
-	const char *m = fw_booted() ? "Freeze test: the watchdog should restart us in ~8 s"
-	                            : "Freeze test (under FEL: no watchdog, returning)";
-	gfx_text((GW - gfx_text_w(m, &font16x32, 1)) / 2, GH / 2 - 16, m, &font16x32, 1, 0xffffff);
-	logf("app: freeze test\n");
-	if (!fw_booted()) return;
-	for (;;) ;
-}
 
 static void open_page(void)
 {
@@ -173,11 +162,12 @@ static int handle(const event *e)
 		if (st.page == 1 && (e->key == MCU_KEY_CW || e->key == MCU_KEY_CCW))
 			return bt_ui_knob(e->key == MCU_KEY_CW ? 1 : -1);
 		if (st.page == 1 && e->key == MCU_KEY_KNOB) return bt_ui_knob_push();
+		if (st.page == 3 && (e->key == MCU_KEY_CW || e->key == MCU_KEY_CCW))
+			return settings_ui_knob(e->key == MCU_KEY_CW ? 1 : -1);
 		if (e->key == MCU_KEY_CW && home) st.focus = (st.focus + 1) % HOME_TILES;
 		else if (e->key == MCU_KEY_CCW && home) st.focus = (st.focus + HOME_TILES - 1) % HOME_TILES;
 		else if (e->key == MCU_KEY_KNOB && st.page == 0) return radio_knob_push();   /* Back button leaves */
 		else if (e->key == MCU_KEY_KNOB) { st.page = home ? st.focus : -1; open_page(); }
-		else if (e->key == MCU_KEY_PHONE && st.page == 3) freeze_test();
 		else if (e->key == MCU_KEY_PHONE) st.banner_until = now_ms() + 2000;
 		return 1;
 	case EV_TOUCH_DOWN:
@@ -196,7 +186,8 @@ static int handle(const event *e)
 		int p = home ? home_hit(e->x, e->y) :
 		        st.page == 0 && radio_modal() ? radio_hit(e->x, e->y) :
 		        in_back(e->x, e->y) ? 0 : st.page == 0 ? radio_hit(e->x, e->y) :
-		        st.page == 1 ? bt_ui_hit(e->x, e->y) : -1;
+		        st.page == 1 ? bt_ui_hit(e->x, e->y) :
+		        st.page == 3 ? settings_ui_hit(e->x, e->y) : -1;
 		if (e->type == EV_TOUCH_DOWN) { st.press_ms = e->ms; st.hold_fired = 0; }
 		else if (p != st.pressed) { st.press_ms = e->ms; st.hold_fired = 0; }   /* slid onto another button */
 		if (p == st.pressed) return e->type == EV_TOUCH_DOWN;
@@ -210,6 +201,7 @@ static int handle(const event *e)
 			else if (st.pressed == 0) st.page = -1;
 			else if (st.page == 0 && !st.hold_fired) radio_press(st.pressed);
 			else if (st.page == 1) bt_ui_press(st.pressed);
+			else if (st.page == 3) settings_ui_press(st.pressed);
 		}
 		st.pressed = -1;
 		return 1;
@@ -225,7 +217,10 @@ int main(void)
 	int ti = input_init();
 	settings_load();
 	snd_vol = cfg.vol; snd_muted = cfg.muted;
-	mcu_key_led(cfg.led);                              /* also stops the buttons colour-cycling */
+	display_brightness(cfg.bright ? cfg.bright : 10);
+	mcu_start();                                       /* the key LED command needs it */
+	if (cfg.led < LED_PURPLE || cfg.led > LED_GREEN) cfg.led = LED_WHITE;   /* solid colours only */
+	mcu_key_led(cfg.led);
 	bt_init();
 	/* resume the last source, on its page (Back goes home) */
 	st.page = st.focus = cfg.source == SRC_BT ? 1 : 0;
@@ -285,6 +280,7 @@ int main(void)
 			was_playing = bt.playing;
 		}
 		dirty |= st.page == 1 && bt_ui_tick();
+		dirty |= st.page == 3 && settings_ui_tick();
 		int b = now_ms() < st.banner_until || (st.page == 0 && radio_note());
 		if (b != banner) { banner = b; dirty = 1; }
 		if (!dirty) { udelay(1000); continue; }
