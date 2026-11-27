@@ -534,3 +534,20 @@ an Si4730 at `0x11`, but the board's tuner-module footprint is empty, so the
 radio on this build probably isn't that I2C tuner. As before, `A0` led to a reset
 a couple of minutes later (heartbeat unanswered); the unit came back up in ours.
 `twi.c` now sets up the TWI1 and TWI2 pins too.
+
+**Radio audio, rounds 2–4.**
+- **TWI1 is PB4 (SCK) + PB5 (SDA), function 4** (Linux `pinctrl-sun20i-d1.c`);
+  `sys_config`'s `PG14` is EMAC in that slot, and the app's "radio reset" PB5 is
+  the bus's SDA. Empty on the right pins too, with the MCU in radio mode, so this
+  board has no I2C tuner: the app drives an absent Si4730.
+- **MCU start-up list** (from `init.axf` `0xe92742c8`): `A4`, `A0`, `B7 [02]`,
+  `C3`, `BA`, `A7 [0F 00]` (`B3` skipped when `bArmRadio=1`), all acked; `A7
+  [04 00]` sets `A6` data[1] bit 0x40.
+- **Keep-alive:** the MCU sends `81 B2 [00 CE 00 00 00 00]` every 2–3 s and resets
+  the F133 after ~2.5 min if unanswered. The app echoes it as **`B0 [CE 00 00 00
+  00]`** (`02 80 B0 05 CE 00 00 00 00 FB`); answering once stopped the pings.
+  `B0 [CE 01 …]` is a separate "host up" announce.
+- **Still no sound:** BD3702 init + every input 0–15 at −10 dB leaves the rear
+  RCA at the noise floor, not even switching clicks. Stock mutes only through
+  BD3702 volume (reg `0x20` = `0xFF`), so the dead output is past the BD3702 or
+  the radio audio doesn't come in the way we think.

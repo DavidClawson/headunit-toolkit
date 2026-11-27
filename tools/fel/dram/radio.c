@@ -26,13 +26,24 @@ static void mcu_send(uint8_t cmd, const uint8_t *d, unsigned n)
 	uart_putc(1, x);
 }
 
+static unsigned acks;
+
+/* log what the MCU sends; answer its keep-alive (81 B2 [00 CE ..]) with
+   B0 [CE 00 00 00 00], as the app's key forwarder does (init.axf 0xe918cfc4) */
 static void mcu_listen(unsigned ms)
 {
+	static const uint8_t ping[6] = { 0x02, 0x81, 0xB2, 0x06, 0x00, 0xCE };
+	static const uint8_t pong[5] = { 0xCE, 0x00, 0x00, 0x00, 0x00 };
+	static unsigned m;
+	static int pending;
 	uint32_t t0 = ticks();
 	unsigned n = 0;
 	while (elapsed_ms(t0) < ms) {
 		int c = uart_getc(1);
 		if (c < 0) continue;
+		m = (c == ping[m]) ? m + 1 : (c == ping[0]);
+		if (m == 6) { m = 0; pending = 6; }        /* rest of the frame: 4 data + xor */
+		else if (pending && --pending == 1) { pending = 0; mcu_send(0xB0, pong, 5); acks++; }
 		if (n % 16 == 0) logf("%s  mcu:", n ? "\n" : "");
 		logf(" %02x", c);
 		n++;
@@ -109,7 +120,7 @@ int main(void)
 	logf(" C3\n"); mcu_send(0xC3, 0, 0);   mcu_listen(500);
 	logf(" BA\n"); mcu_send(0xBA, 0, 0);   mcu_listen(300);
 	logf(" A7 0F 00\n"); mcu_send(0xA7, a7f, 2); mcu_listen(300);
-	logf(" B0 CE 01 (likely heartbeat reply)\n"); mcu_send(0xB0, ce, 5); mcu_listen(300);
+	logf(" B0 CE 01 (host up)\n"); mcu_send(0xB0, ce, 5); mcu_listen(300);
 	logf(" A7 04 00 (radio)\n"); mcu_send(0xA7, src, 2); mcu_listen(3000);
 
 	logf("2. scan\n");
@@ -129,7 +140,7 @@ int main(void)
 	static const uint8_t pu[3] = { 0x01, 0xD0, 0x05 };
 	int e = si_cmd(pu, 3, 0, 0);
 	logf("  POWER_UP: %d\n", e);
-	if (e) { logf("  tuner not responding: stopping before the sound processor\n"); return 1; }
+	if (e) { logf("  no tuner on TWI1 (expected on this board): skipping to the sound processor\n"); goto sound; }
 	udelay(200000);
 	uint8_t r[9] = {0};
 	static const uint8_t rev[1] = { 0x10 };
@@ -156,6 +167,7 @@ int main(void)
 	logf("  FM_TUNE_STATUS: %d  freq %u (10 kHz), valid %u, RSSI %u dBuV, SNR %u dB, took %u ms\n",
 	     e, (t[2] << 8) | t[3], t[1] & 1, t[4], t[5], elapsed_ms(t0));
 
+sound:
 	logf("4. BD3702\n");
 	bad = 0;
 	for (unsigned i = 0; i < sizeof bd_init / sizeof bd_init[0]; i++)
@@ -164,8 +176,12 @@ int main(void)
 	v = 0x8A;         bad += twi_write(2, BD, 0x20, 1, &v, 1) != 0;
 	logf("  %u writes, %u failed; input 0x0B (radio), volume -10 dB\n",
 	     (unsigned)(sizeof bd_init / sizeof bd_init[0]) + 2, bad);
-	logf("5. MCU after setup\n");
-	mcu_listen(500);
+	logf("5. radio input for 20 s (answering keep-alives), then inputs 0..15, 2 s each\n");
+	mcu_listen(20000);
+	logf("  keep-alives answered so far: %u\n", acks);
+	for (uint8_t in = 0; in < 16; in++) { twi_write(2, BD, 0x05, 1, &in, 1); mcu_listen(2000); }
+	v = 0x0B; twi_write(2, BD, 0x05, 1, &v, 1);
+	logf("  keep-alives answered: %u\n", acks);
 	logf("done\n");
 	return 0;
 }
