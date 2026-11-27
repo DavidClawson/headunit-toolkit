@@ -161,5 +161,6 @@ MCU. **All of this is inferred and untested.**
 The `A6` frame seen so far (`00 04 …`, then `00 44 …` after source = Radio)
 fits this. A live MCU-frame monitor in our firmware would let each input be
 checked by hand (press a remote key, ground the brake wire) without FEL. `81 B9` subtype 4 (a 0–100 level the
-app applies to the backlight) may be a dimmer input such as the illumination
-wire, not a light sensor.
+app applies to the backlight) may be the dimmer input: the harness's orange
+illumination wire (standard car-stereo colour). `illDetectGpio=-1` says it isn't an
+F133 pin, so the MCU reads it.
