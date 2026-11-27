@@ -614,3 +614,28 @@ the tuner's reset (active-low), as `radioResetGpio=105` says.
     tuner pin besides the reset. So the tuner is likely always powered, and the
     MCU start-up may not be needed for the radio (untested).
   - `[twi_para]` is a bootloader setting the kernel never reads.
+
+**Radio page in our firmware (2026-11-27).** The FM radio moved from a test
+program into the boot firmware (`tools/fel/dram/tuner.c`, `radio_ui.c`):
+- **Tuner and sound:** `tuner.c` drives the Si4730 without blocking (tune and
+  seek run while the UI keeps drawing and the watchdog is petted) and the
+  BD3702 (input, volume, mute).
+  - US de-emphasis (75 µs), 200 kHz steps.
+  - Seek stops at RSSI ≥ 20 dBµV and SNR ≥ 6 dB.
+  - **No MCU traffic is needed for the radio.**
+- **Page:**
+  - large frequency, signal meter, RSSI/SNR, stereo indicator;
+  - seek, ±0.2 MHz, Scan → a Stations list (20 per page);
+  - tap to listen, hold to add or remove a favorite;
+  - 6 favorites in the bottom row; volume and mute.
+- **Knob:** volume by default; push for FAVORITES, push again for TUNE. A ring
+  shows what the knob controls while it's in use. 5 s idle → back to volume.
+- **Scan on the bench** (coat-hanger antenna): 31–33 stations, 88.1–107.5 MHz,
+  in about 15 s.
+- **Fixed on the way:** `ticks()` is a 32-bit 24 MHz counter that wraps every
+  179 s. Test timeouts over that overflowed (a "10-minute" run quit after about
+  65 s, which looked like a scan hang), and banners and press timing in the boot
+  build would have glitched. Added `millis()`, a wrap-free millisecond clock.
+- **Still RAM-only:** favorites and volume reset on power-up. Next: a settings
+  sector (the last 4 KB of our slot), then names via an on-screen keyboard.
+- **Size:** 39 KB of the 64 KB slot.
