@@ -7,6 +7,7 @@
  *   tap a tile: open it                 "< Back" (or knob push) on a page: return
  *   phone key: banner for 2 s
  *   Radio page: see radio_ui.c (knob push switches the knob mode there; Back leaves)
+ *   Bluetooth page: see bt_ui.c (knob = volume, push = play/pause; Back leaves)
  *   hold the status bar 3 s: reboot into stock firmware once (fw.c)
  *   phone key on the Settings page: deliberate freeze, to test that the
  *   watchdog (petted every loop pass when booted from NOR) restarts us
@@ -22,6 +23,8 @@
 #include "mcu.h"
 #include "fw.h"
 #include "radio_ui.h"
+#include "bt.h"
+#include "bt_ui.h"
 
 #ifndef SECONDS
 #define SECONDS 60
@@ -79,6 +82,7 @@ static void draw(void)
 		gfx_rrect(BACK_X, BACK_Y, BACK_W, BACK_H, 20, st.pressed == 0 ? gfx_mix(c, 0xffffff, 90) : c);
 		gfx_text(BACK_X + 36, BACK_Y + 20, "< Back", &font16x32, 1, 0xffffff);
 		if (st.page == 0) radio_draw(st.pressed);
+		else if (st.page == 1) bt_ui_draw(st.pressed);
 		else {
 			const char *n = home_tile_name(st.page);
 			gfx_text((GW - gfx_text_w(n, &font16x32, 3)) / 2, 260, n, &font16x32, 3, 0xffffff);
@@ -129,6 +133,12 @@ static void freeze_test(void)
 	for (;;) ;
 }
 
+static void open_page(void)
+{
+	if (st.page == 0) radio_open();
+	if (st.page == 1) bt_ui_open();
+}
+
 /* returns 1 if the screen needs redrawing */
 static int handle(const event *e)
 {
@@ -137,10 +147,13 @@ static int handle(const event *e)
 	case EV_KEY:
 		if (st.page == 0 && (e->key == MCU_KEY_CW || e->key == MCU_KEY_CCW))
 			return radio_knob(e->key == MCU_KEY_CW ? 1 : -1);
+		if (st.page == 1 && (e->key == MCU_KEY_CW || e->key == MCU_KEY_CCW))
+			return bt_ui_knob(e->key == MCU_KEY_CW ? 1 : -1);
+		if (st.page == 1 && e->key == MCU_KEY_KNOB) return bt_ui_knob_push();
 		if (e->key == MCU_KEY_CW && home) st.focus = (st.focus + 1) % HOME_TILES;
 		else if (e->key == MCU_KEY_CCW && home) st.focus = (st.focus + HOME_TILES - 1) % HOME_TILES;
 		else if (e->key == MCU_KEY_KNOB && st.page == 0) return radio_knob_push();   /* Back button leaves */
-		else if (e->key == MCU_KEY_KNOB) { st.page = home ? st.focus : -1; if (st.page == 0) radio_open(); }
+		else if (e->key == MCU_KEY_KNOB) { st.page = home ? st.focus : -1; open_page(); }
 		else if (e->key == MCU_KEY_PHONE && st.page == 3) freeze_test();
 		else if (e->key == MCU_KEY_PHONE) st.banner_until = now_ms() + 2000;
 		return 1;
@@ -159,7 +172,8 @@ static int handle(const event *e)
 		if (e->type == EV_TOUCH_MOVE && st.hold_fired) return 0;   /* a hold took this touch */
 		int p = home ? home_hit(e->x, e->y) :
 		        st.page == 0 && radio_modal() ? radio_hit(e->x, e->y) :
-		        in_back(e->x, e->y) ? 0 : st.page == 0 ? radio_hit(e->x, e->y) : -1;
+		        in_back(e->x, e->y) ? 0 : st.page == 0 ? radio_hit(e->x, e->y) :
+		        st.page == 1 ? bt_ui_hit(e->x, e->y) : -1;
 		if (e->type == EV_TOUCH_DOWN) { st.press_ms = e->ms; st.hold_fired = 0; }
 		else if (p != st.pressed) { st.press_ms = e->ms; st.hold_fired = 0; }   /* slid onto another button */
 		if (p == st.pressed) return e->type == EV_TOUCH_DOWN;
@@ -169,9 +183,10 @@ static int handle(const event *e)
 	case EV_TOUCH_UP:
 		if (st.hold_t0) { st.hold_t0 = 0; return 1; }
 		if (st.pressed >= 0) {
-			if (home) { st.focus = st.pressed; st.page = st.pressed; if (st.page == 0) radio_open(); }
+			if (home) { st.focus = st.pressed; st.page = st.pressed; open_page(); }
 			else if (st.pressed == 0) st.page = -1;
 			else if (st.page == 0 && !st.hold_fired) radio_press(st.pressed);
+			else if (st.page == 1) bt_ui_press(st.pressed);
 		}
 		st.pressed = -1;
 		return 1;
@@ -185,6 +200,8 @@ int main(void)
 	int nor = fw_init();
 	if (display_up(FB0)) { logf("app: display_up failed\n"); return 1; }
 	int ti = input_init();
+	mcu_key_led(LED_WHITE);                            /* stops the buttons colour-cycling */
+	bt_init();
 	fw_boot_ok();                                      /* up: the selector's watchdog can stand down */
 	str_cat(st.status, ti ? "touch not answering; keys only" : "ready: touch a tile or turn the knob");
 	logf("app: input_init %d, %s\n", ti, nor ? "booted from NOR" : "under FEL");
@@ -227,6 +244,8 @@ int main(void)
 			if (radio_hold(st.pressed)) { st.pressed = -1; dirty = 1; }   /* the popup takes over */
 		}
 		dirty |= radio_tick() && st.page == 0;
+		dirty |= bt_poll() && st.page == 1;
+		dirty |= st.page == 1 && bt_ui_tick();
 		int b = now_ms() < st.banner_until || (st.page == 0 && radio_note());
 		if (b != banner) { banner = b; dirty = 1; }
 		if (!dirty) { udelay(1000); continue; }

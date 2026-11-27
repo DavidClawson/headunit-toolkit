@@ -30,6 +30,12 @@ void tuner_tune(uint16_t freq);
 void tuner_seek(int up, int wrap);
 int  tuner_poll(void);              /* 1 when tuner.* changed; 2 when a tune/seek just finished */
 
-void sound_init(void);              /* BD3702 table, input = radio */
-void sound_volume(int level);       /* 0 (mute) .. SOUND_MAX */
+/* sound: one volume for every source */
 #define SOUND_MAX 30
+#define SOUND_IN_RADIO 0x0B         /* BD3702 input select (register 0x05) */
+#define SOUND_IN_BT    0x0A
+extern int snd_vol, snd_muted;      /* 1..SOUND_MAX; muted flag */
+void sound_init(void);              /* once: BD3702 table, volume applied */
+void sound_input(uint8_t in);
+void sound_apply(void);             /* write snd_vol / snd_muted */
+void sound_step(int dir);           /* volume +/- 1 (unmutes) */

@@ -650,3 +650,12 @@ program into the boot firmware (`tools/fel/dram/tuner.c`, `radio_ui.c`):
   in [mcu-protocol.md](mcu-protocol.md).
 - **Key LEDs:** set to a fixed colour with `B0 [FE 00 00 05 m]`, which ends the
   colour cycling.
+- **Now Playing page** (`bt.c`, `bt_ui.c`), tile 2:
+  - title, artist and album;
+  - a progress bar with times;
+  - prev, play/pause and next;
+  - the knob does volume and its push does play/pause.
+  - Opening the Radio or Bluetooth page switches the BD3702 input, and the
+    volume is shared (`sound_*` in `tuner.c`).
+  - At boot the firmware sets the key LEDs to white.
+  - Titles are folded to ASCII for our fonts (é → e, other characters → `?`).
