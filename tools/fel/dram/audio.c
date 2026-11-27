@@ -84,10 +84,16 @@ static void dma_start(void)
 	wr32(CH(0x00), 1);
 }
 
-static uint32_t rpos(void)                                              /* frame the DMA is reading */
+/* Frame the DMA is reading. Around a descriptor switch the current-source register can
+   read a stale or in-between value, so take it only when two reads agree and it's in
+   the ring; otherwise keep the last good one. */
+static uint32_t last_good;
+static uint32_t rpos(void)
 {
-	uint32_t a = rd32(CH(0x10)) - (uint32_t)(uintptr_t)ring;
-	return a / 4 < RING ? a / 4 : 0;
+	uint32_t a = rd32(CH(0x10)), b = rd32(CH(0x10));
+	uint32_t base = (uint32_t)(uintptr_t)ring;
+	if (a != b || a < base || a >= base + RING * 4) return last_good;
+	return last_good = (a - base) / 4;
 }
 
 int audio_init(void)
@@ -128,8 +134,9 @@ void audio_service(void)
 	uint32_t now = millis();
 	if (now - last_ms > audio_stats.max_gap_ms) audio_stats.max_gap_ms = now - last_ms;
 	last_ms = now;
-	uint32_t r = rpos();
-	rabs += (r - last_r + RING) % RING;
+	uint32_t r = rpos(), d = (r - last_r + RING) % RING;
+	if (d > RING - RING / 8) d = 0;          /* a small step backwards: a glitchy read, not a lap */
+	rabs += d;
 	last_r = r;
 	if (wabs < rabs + 48) {                                        /* we fell behind: what's left is stale */
 		audio_stats.underruns++;

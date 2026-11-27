@@ -153,7 +153,14 @@ void sound_init(void)
 	sound_apply();
 }
 
-void sound_input(uint8_t in) { sound_init(); snd_input = in; bd(0x05, in); }
+static uint8_t phys_in = SOUND_IN_RADIO, idle_f133;
+static void route(void)
+{
+	uint8_t want = idle_f133 ? 0x00 : snd_input;    /* 0x00: the F133 (audio.h SOUND_IN_F133) */
+	if (want != phys_in) { bd(0x05, want); phys_in = want; }
+}
+void sound_input(uint8_t in) { sound_init(); snd_input = in; route(); }
+void sound_idle_f133(int on) { sound_init(); idle_f133 = (uint8_t)!!on; route(); }
 
 void sound_step(int dir)
 {

@@ -37,6 +37,7 @@ int  tuner_poll(void);              /* 1 when tuner.* changed; 2 when a tune/see
 extern int snd_vol, snd_muted;      /* 1..SOUND_MAX; muted flag */
 extern uint8_t snd_input;           /* current BD3702 input */
 void sound_init(void);              /* once: BD3702 table, volume applied */
-void sound_input(uint8_t in);
+void sound_input(uint8_t in);       /* the logical source (radio / BT) */
+void sound_idle_f133(int on);       /* while the source is silent: hear the F133 (UI sounds) instead */
 void sound_apply(void);             /* write snd_vol / snd_muted */
 void sound_step(int dir);           /* volume +/- 1 (unmutes) */

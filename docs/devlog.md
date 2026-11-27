@@ -747,3 +747,19 @@ program into the boot firmware (`tools/fel/dram/tuner.c`, `radio_ui.c`):
   over the radio or Bluetooth needs a mixing input, if the chip has one, or a
   brief switch. Clicks are easy where the F133 is the source (home screen,
   games).
+- **Mixing input checked (`mixtest.c`):** the BD3702 matches the BD37534
+  datasheet. Mixing is register `0x30` only (`0xFF` off, `0x80` 0 dB); `0x03` is
+  loudness setup, not mixing. The mix input is a separate mono pin (`MIN`) that
+  is added at the *front* faders. With the radio on and mixing at 0 dB, no F133
+  tone reached the rear RCA. Stock never enables mixing, so `MIN` is probably
+  unconnected; the front outputs can be checked once a speaker is on the bench.
+- **DMA position fix:** reading the current source address right at a
+  descriptor switch can give a stray value, which caused 45 false underruns in a
+  tight loop. It now takes the value only when two reads agree, and ignores small
+  backward steps: 0 underruns since.
+- **Touch sounds in the app:** `audio_init` at boot, `audio_service` every loop
+  pass, and a click on touch-down. `sound_idle_f133()` (tuner.c) switches the
+  BD3702 to the F133 only while the source is Bluetooth with nothing playing and
+  no call; the app's logical source routing is unchanged. On the radio, taps are
+  silent and the radio keeps playing. Settings has a "Touch sounds" toggle
+  (saved). 53.8 KB of 60.

@@ -15,7 +15,7 @@
 #include "settings.h"
 #include "settings_ui.h"
 
-enum { S_LED0 = 1, S_LED8 = S_LED0 + 6, S_BRDN, S_BRUP, S_STOCK, S_FREEZE, S_END };
+enum { S_LED0 = 1, S_LED8 = S_LED0 + 6, S_BRDN, S_BRUP, S_STOCK, S_FREEZE, S_CLICKS, S_END };
 #define BTN 0x2b3a5c
 
 /* solid colours only: "cycle" and "off" didn't behave reliably on the bench (2026-11-27) */
@@ -31,7 +31,7 @@ static void rect(int id, int *x, int *y, int *w, int *h)
 	if (id == S_BRDN) { *x = 60;  *w = 140; return; }
 	if (id == S_BRUP) { *x = 760; *w = 140; return; }
 	*y = 520; *w = 340;
-	*x = id == S_STOCK ? 60 : 430;
+	*x = id == S_STOCK ? 60 : id == S_FREEZE ? 430 : 800;
 }
 
 int settings_ui_hit(int x, int y)
@@ -76,8 +76,9 @@ void settings_ui_draw(int pressed)
 	int arm = millis() < confirm_until;
 	button(S_STOCK, arm ? "Tap again: reboot" : "Reboot to stock", pressed == S_STOCK, arm ? 0xc92a2a : BTN);
 	button(S_FREEZE, "Freeze test", pressed == S_FREEZE, BTN);
-	gfx_text(800, 532, "freeze: the watchdog should", &font8x16, 1, 0x8aa0c8);
-	gfx_text(800, 552, "restart us within ~8 s", &font8x16, 1, 0x8aa0c8);
+	button(S_CLICKS, cfg.no_clicks ? "Touch sounds: off" : "Touch sounds: on", pressed == S_CLICKS,
+	       cfg.no_clicks ? BTN : 0x2f6b3a);
+	gfx_text(800, 606, "clicks when Bluetooth is idle", &font8x16, 1, 0x8aa0c8);
 
 	char s[160], *p = str_cat(s, "Tuner: ");
 	if (tuner.ok) { p = str_cat(p, "Si47"); p = str_u(p, tuner.part); *p++ = ' '; *p++ = 'f'; *p++ = 'w';
@@ -105,6 +106,7 @@ int settings_ui_press(int id)
 		if (millis() < confirm_until) fw_boot_stock();
 		confirm_until = millis() + 3000;
 	}
+	if (id == S_CLICKS) cfg.no_clicks = !cfg.no_clicks;
 	if (id == S_FREEZE) {
 		logf("app: freeze test\n");
 		if (fw_booted()) for (;;) ;

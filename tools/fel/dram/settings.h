@@ -12,7 +12,8 @@ enum { SRC_RADIO, SRC_BT };
 typedef struct {
 	uint8_t vol, muted, source, led;
 	uint16_t freq;
-	uint8_t bright, pad;    /* bright 1..10; 0 (older records) = 10 */
+	uint8_t bright;         /* 1..10; 0 (older records) = 10 */
+	uint8_t no_clicks;      /* touch sounds off (0 = on: the default, and older records) */
 	struct { uint16_t f; char name[24]; } fav[SET_NFAV];
 } settings_t;
 
