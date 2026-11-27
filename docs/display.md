@@ -136,3 +136,23 @@ GT911 firmware a config write is saved to its flash.
 The earlier "touch doesn't report in caught-FEL sessions" (via `buttons.py`)
 wasn't chased; from the DRAM program, in a caught-FEL session, it reports
 straight away.
+
+## Event loop
+
+`tools/fel/dram/app.c` is the first program shaped like firmware: one loop
+where input events change a small state struct and a changed state is redrawn
+into the back buffer and flipped on vblank.
+
+- `uart.c`: polled 16550 driver; UART1 on PG12/PG13 (function 7) at 115200.
+- `mcu.c`: frame parser for the AB5301 (`02 dir cmd len data xor`, checksum
+  checked) and `B2` key decoding (`docs/mcu-protocol.md`). **Listen-only**: we
+  never send `A0`, so the MCU's heartbeat watchdog (reset after ~2.5 min
+  unanswered) never starts. Keys arrive unprompted.
+- `input.c`: one queue for touch down/move/up (first finger, screen
+  coordinates) and front-panel keys.
+
+Demo: knob turns move a focus ring across the tiles, knob push opens or closes
+a page, taps open tiles and hit "< Back", the phone key shows a banner. All
+verified on the bench; knob and taps feel instant. One 60 s run: 31 events,
+35 redraws, 0 bad MCU frames; the slowest redraw (home screen + vblank wait)
+took 71 ms, so a full-screen redraw costs up to ~4 frames.

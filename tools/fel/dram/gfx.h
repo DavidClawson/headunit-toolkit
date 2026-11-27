@@ -18,6 +18,7 @@ void gfx_clear(uint32_t c);
 void gfx_fill(int x, int y, int w, int h, uint32_t c);
 void gfx_rect(int x, int y, int w, int h, int t, uint32_t c);       /* outline, t px */
 void gfx_rrect(int x, int y, int w, int h, int r, uint32_t c);      /* filled, rounded */
+void gfx_rring(int x, int y, int w, int h, int r, int t, uint32_t c);  /* rounded outline, t px */
 void gfx_vgrad(int x, int y, int w, int h, uint32_t top, uint32_t bottom);
 int  gfx_text(int x, int y, const char *s, const font_t *f, int scale, uint32_t c); /* returns end x */
 int  gfx_text_w(const char *s, const font_t *f, int scale);

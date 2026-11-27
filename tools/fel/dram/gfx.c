@@ -53,6 +53,28 @@ void gfx_rrect(int x, int y, int w, int h, int r, uint32_t c)
 	}
 }
 
+static int corner_inset(int j, int r)            /* rows to skip at column j of a radius-r corner */
+{
+	if (j >= r) return 0;
+	int d2 = 2 * (r - j) - 1;
+	return r - isqrt(4 * r * r - d2 * d2) / 2;
+}
+
+void gfx_rring(int x, int y, int w, int h, int r, int t, uint32_t c)
+{
+	if (2 * r > w) r = w / 2;
+	if (2 * r > h) r = h / 2;
+	int ri = r - t > 0 ? r - t : 0;
+	for (int i = 0; i < w; i++) {
+		int j = i < w / 2 ? i : w - 1 - i;
+		int out = corner_inset(j, r);
+		if (j < t) { gfx_fill(x + i, y + out, 1, h - 2 * out, c); continue; }
+		int in = t + corner_inset(j - t, ri);       /* inner edge, inset by the thickness */
+		gfx_fill(x + i, y + out, 1, in - out, c);
+		gfx_fill(x + i, y + h - in, 1, in - out, c);
+	}
+}
+
 uint32_t gfx_mix(uint32_t a, uint32_t b, unsigned t)
 {
 	uint32_t o = 0;

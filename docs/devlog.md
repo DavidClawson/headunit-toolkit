@@ -480,3 +480,8 @@ interactive screen from our own code.
 17,083 µs (58.54 Hz, exactly the panel timing). With `display_flip()` waiting
 on it, double-buffered animation runs at 58.6 fps with no tearing; the same
 bars drawn straight into the visible buffer show cuts.
+
+**Event loop:** `uart.c` + `mcu.c` (listen-only AB5301 frame parser) +
+`input.c` (touch and keys in one queue) + `app.c`. The knob moves a focus ring
+and opens pages, taps open tiles and go back, the phone key shows a banner.
+Everything works and feels instant. This is the skeleton of the firmware.
