@@ -130,6 +130,7 @@ int display_vblank_wait(void)
 
 void display_flip(uint32_t fb)
 {
+	dcache_flush();                                  /* the DE reads the buffer from RAM */
 	wr32(UI_CH + 0x10, fb);
 	wr32(MIXER + 0x8, 1);              /* mixer latches the new address at its next frame */
 	display_vblank_wait();             /* after this the old buffer is free to draw into */

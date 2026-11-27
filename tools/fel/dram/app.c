@@ -217,6 +217,8 @@ int main(void)
 {
 	log_reset();
 	int nor = fw_init();
+	uint32_t mhcr0 = mhcr();
+	dcache_enable();                                   /* every flip flushes; audio DMA flushes too */
 	if (display_up(FB0)) { logf("app: display_up failed\n"); return 1; }
 	int ti = input_init();
 	settings_load();
@@ -232,7 +234,7 @@ int main(void)
 	open_page();
 	fw_boot_ok();                                      /* up: the selector's watchdog can stand down */
 	str_cat(st.status, ti ? "touch not answering; keys only" : "ready: touch a tile or turn the knob");
-	logf("app: input_init %d, %s\n", ti, nor ? "booted from NOR" : "under FEL");
+	logf("app: input_init %d, %s; mhcr %x -> %x\n", ti, nor ? "booted from NOR" : "under FEL", mhcr0, mhcr());
 
 	uint32_t back = display_fb() == FB0 ? FB1 : FB0;
 	int dirty = 1, banner = 0;

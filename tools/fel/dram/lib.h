@@ -34,11 +34,17 @@ void *memset(void *d, int c, size_t n);
 void *memcpy(void *d, const void *s, size_t n);
 
 /* C906 (T-Head): write back and invalidate the whole D-cache (th.dcache.ciall),
-   so a DMA reader (display engine) sees what the CPU wrote. The BROM leaves the
-   D-cache on, write-back, with the T-Head extensions enabled (mxstatus bit 22). */
+   so a DMA reader (display engine, audio DMA) sees what the CPU wrote. Under FEL
+   the BROM leaves the D-cache OFF (mhcr 0x109); dcache_enable() turns it on. */
 static inline void dcache_flush(void)
 {
 	__asm__ volatile(".long 0x0030000b\n\tfence rw, rw" ::: "memory");
+}
+/* invalidate (th.dcache.iall), then mhcr = 0x11ff: D-cache, write-allocate, write-back,
+   return stack, branch prediction, BTB (what xboot uses on the D1) */
+static inline void dcache_enable(void)
+{
+	__asm__ volatile(".long 0x0020000b\n\tli t0, 0x11ff\n\tcsrw 0x7c1, t0\n\tfence" ::: "t0", "memory");
 }
 static inline uint32_t mhcr(void)
 {
