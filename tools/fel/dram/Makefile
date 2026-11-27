@@ -3,7 +3,7 @@ CROSS ?= riscv64-elf-
 CFLAGS = -march=rv64gc_zicsr -mabi=lp64d -mcmodel=medany -O2 -ffreestanding \
          -fno-builtin -nostdlib -nostartfiles -Wall -Wextra -fno-tree-loop-distribute-patterns
 LDFLAGS = -T dram.ld -Wl,--build-id=none -Wl,--no-warn-rwx-segments
-PROGS = memtest clock dsi1 dsi2 dsion dsi3 dsi4 ui touch touchrate vsync app
+PROGS = memtest clock dsi1 dsi2 dsion dsi3 dsi4 ui touch touchrate vsync app hang
 
 all: $(PROGS:=.bin)
 

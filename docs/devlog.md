@@ -500,3 +500,9 @@ the flash yet.
 boot0 untouched). Power on → BROM → boot0 → FEL window → selector → our image
 at `0x120000` → our home screen with "NOR" in the status bar. No Mac, no FEL:
 the unit runs our firmware from its own flash.
+
+**Fallbacks verified:** a firmware image that hangs gets reset by the
+selector's watchdog and the unit boots stock; an image with a broken checksum
+is skipped (stock straight away); the status-bar hold boots stock once. The
+bench unit now boots our firmware by default, with stock always one gesture
+away and the FEL window still first on every boot.

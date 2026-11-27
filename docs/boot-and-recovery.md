@@ -328,7 +328,7 @@ What this gives:
    is now only the backstop. Details: `tools/fel/README.md`.
 4. **Clean stock → new firmware tests** once the above is proven on the bench.
 
-### Booting our firmware from the NOR (agreed 2026-11-26; steps 1–3 done: **it boots**)
+### Booting our firmware from the NOR (2026-11-26: built, written, every fallback verified)
 
 boot0 after the FEL window (from the disassembly): DRAM init `0x27998`
 ("dram size"), debug-key checks, clear `0x40800000`, then **`0x28d3c: jal
@@ -377,6 +377,25 @@ boot0 after the FEL window (from the disassembly): DRAM init `0x27998`
   our firmware from its own flash**: FEL window → selector → `app.fw` → our home
   screen, "NOR" in the status bar. Rollback: catch, then
   `tools/fel/boot0-write.sh stock/nor/boot0-felwin-v1.bin`.
+- **Step 4, fallbacks verified on the bench (2026-11-26):**
+
+  | Test | Result |
+  |---|---|
+  | Hold the status bar 3 s | reboots into stock, once; the next power cycle boots ours |
+  | `dram/hang.fw` (red screen, then hangs without `fw_boot_ok()`) | red screen, watchdog reset after 8 s, FEL window, then **stock** |
+  | `bad.fw` (app with one byte flipped after checksumming) | **stock** straight away, no red screen |
+  | `app.fw` restored | ours again |
+
+  `fw-write.sh` erases the whole slot before writing and refuses images that
+  fail the selector's checks (`ALLOW_BAD=1` for this kind of test).
+
+**Day to day:** power on boots ours. To boot stock once: hold the status bar
+for 3 s. To update ours: `fel-catch.sh`, power-cycle, `fw-write.sh
+dram/app.fw`, `fel-boot-stock.sh` (despite the name, it just releases the unit
+to boot normally). To make stock the default again: catch, then `xfel spinor
+erase 0x120000 0x10000`. To remove the selector: `boot0-write.sh
+stock/nor/boot0-felwin-v1.bin`.
+
 - **Not pursued:** calling boot0's flash driver from a DRAM program under FEL
   (to prove the calling convention early) hung the FEL session twice, and the
   watchdog armed by the test never fired, so the program probably finished and
