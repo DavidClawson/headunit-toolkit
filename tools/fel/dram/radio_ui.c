@@ -9,19 +9,20 @@
  *   Stations: open the list. Tap a station: listen. Hold: add to favorites.
  *   Favorites row: tap: listen. Hold: remove.
  *   Vol - / +, Mute
- * Stations and favorites live in RAM only for now (no flash writes yet).
+ * Favorites and the last station are kept in cfg (settings.c); the station list is RAM-only.
  */
 #include "lib.h"
 #include "gfx.h"
 #include "tuner.h"
 #include "radio_ui.h"
+#include "settings.h"
 
 /* button ids: main page, station list, popup */
 enum { B_SEEKDN = 1, B_DN, B_UP, B_SEEKUP, B_SCAN, B_LIST, B_F1, B_F6 = B_F1 + 5,
        B_VOLDN, B_VOLUP, B_MUTE, B_MAIN_END,
        L_CLOSE = 40, L_PREV, L_NEXT, L_CHIP = 50, L_CHIP_END = L_CHIP + 20,
        P_OK = 80, P_CANCEL };
-#define NFAV 6
+#define NFAV SET_NFAV
 #define NSTA 40
 #define PER_PAGE 20
 #define ACCENT 0xd9480f
@@ -35,7 +36,6 @@ enum { POP_NONE, POP_ADD, POP_REMOVE, POP_FULL };
 
 static struct {
 	int opened, init_err;
-	struct { uint16_t f; char name[24]; } fav[NFAV];
 	struct { uint16_t f; uint8_t rssi; } sta[NSTA];
 	int nsta;
 	int knob;
@@ -107,7 +107,7 @@ const char *radio_note(void) { return millis() < r.note_until ? r.note : 0; }
 
 static int fav_index(uint16_t f)
 {
-	for (int i = 0; i < NFAV; i++) if (r.fav[i].f && r.fav[i].f == f) return i;
+	for (int i = 0; i < NFAV; i++) if (cfg.fav[i].f && cfg.fav[i].f == f) return i;
 	return -1;
 }
 
@@ -119,7 +119,7 @@ void radio_open(void)
 	r.init_err = tuner_init();
 	logf("radio: tuner_init %d, Si47%02u fw %c.%c rev %c\n", r.init_err, tuner.part,
 	     tuner.fw_major, tuner.fw_minor, tuner.rev);
-	if (!r.init_err) tuner_tune(10110);
+	if (!r.init_err) tuner_tune(cfg.freq);
 }
 
 /* ---------- drawing ---------- */
@@ -210,8 +210,8 @@ void radio_draw(int pressed)
 	gfx_text(fx + fw + 16, 212, "MHz", &font16x32, 1, 0xc8d4ec);
 	gfx_text(fx - 90, 116, "FM", &font16x32, 1, ACCENT);
 	int fi = fav_index(tuner.freq);
-	if (fi >= 0 && r.fav[fi].name[0])
-		gfx_text(fx + fw + 16, 120, r.fav[fi].name, &font16x32, 1, 0xffd43b);
+	if (fi >= 0 && cfg.fav[fi].name[0])
+		gfx_text(fx + fw + 16, 120, cfg.fav[fi].name, &font16x32, 1, 0xffd43b);
 	const char *st = r.scanning ? "scanning..." : tuner.busy ? "seeking..." :
 	                 tuner.stereo >= 50 ? "STEREO" : "MONO";
 	gfx_text((GW - gfx_text_w(st, &font16x32, 1)) / 2 - 60, 272, st, &font16x32, 1,
@@ -243,17 +243,22 @@ void radio_draw(int pressed)
 	button(B_LIST, "Stations", 0, mp == B_LIST, ACCENT);
 	for (int i = 0; i < NFAV; i++) {
 		char lab[24] = "Favorite 1", fq[8] = "--";
-		if (r.fav[i].f) {
-			fmt_f(fq, r.fav[i].f);
-			if (r.fav[i].name[0]) str_cat(lab, r.fav[i].name);
+		if (cfg.fav[i].f) {
+			fmt_f(fq, cfg.fav[i].f);
+			if (cfg.fav[i].name[0]) str_cat(lab, cfg.fav[i].name);
 		}
-		if (!r.fav[i].name[0]) lab[9] = (char)('1' + i);
-		int cur = r.fav[i].f && r.fav[i].f == tuner.freq;
+		if (!cfg.fav[i].name[0]) lab[9] = (char)('1' + i);
+		int cur = cfg.fav[i].f && cfg.fav[i].f == tuner.freq;
 		button(B_F1 + i, lab, fq, mp == B_F1 + i, cur ? gfx_mix(ACCENT, 0x000000, 60) : BTN);
 	}
 	button(B_VOLDN, "Vol -", 0, mp == B_VOLDN, BTN);
 	button(B_VOLUP, "Vol +", 0, mp == B_VOLUP, BTN);
 	button(B_MUTE, snd_muted ? "Unmute" : "Mute", 0, mp == B_MUTE, snd_muted ? 0xc92a2a : BTN);
+	{
+		char vs[24], *vp = str_cat(vs, "Volume ");
+		vp = str_u(vp, (unsigned)snd_vol); if (snd_muted) str_cat(vp, " (muted)");
+		gfx_text(552 - gfx_text_w(vs, &font8x16, 1) / 2, 574, vs, &font8x16, 1, 0xc8d4ec);
+	}
 	for (int i = 0; i < SOUND_MAX; i++)
 		gfx_rrect(252 + i * 20, 595, 14, 40, 4,
 		          i < snd_vol ? (snd_muted ? 0x5c6b8a : 0xc8d4ec) : 0x2a3f6a);
@@ -284,7 +289,7 @@ static void scan_finish(void)
 static void fav_add(uint16_t f)
 {
 	for (int i = 0; i < NFAV; i++)
-		if (!r.fav[i].f) { r.fav[i].f = f; r.fav[i].name[0] = 0; say("Added ", f, " to favorites"); return; }
+		if (!cfg.fav[i].f) { cfg.fav[i].f = f; cfg.fav[i].name[0] = 0; say("Added ", f, " to favorites"); return; }
 }
 
 int radio_press(int id)
@@ -292,7 +297,7 @@ int radio_press(int id)
 	if (r.init_err) return 0;
 	if (r.pop != POP_NONE) {
 		if (id == P_OK && r.pop == POP_ADD) fav_add(r.pop_f);
-		if (id == P_OK && r.pop == POP_REMOVE) { r.fav[r.pop_i].f = 0; r.fav[r.pop_i].name[0] = 0; say("Removed ", r.pop_f, 0); }
+		if (id == P_OK && r.pop == POP_REMOVE) { cfg.fav[r.pop_i].f = 0; cfg.fav[r.pop_i].name[0] = 0; say("Removed ", r.pop_f, 0); }
 		r.pop = POP_NONE;
 		return 1;
 	}
@@ -318,7 +323,7 @@ int radio_press(int id)
 	default:
 		if (id >= B_F1 && id <= B_F6) {
 			int i = id - B_F1;
-			if (r.fav[i].f) tuner_tune(r.fav[i].f);
+			if (cfg.fav[i].f) tuner_tune(cfg.fav[i].f);
 			else say("Hold a station in the list to add it", 0, 0);
 		}
 	}
@@ -331,13 +336,13 @@ int radio_hold(int id)
 	if (r.list_open && id >= L_CHIP && id < L_CHIP_END) {
 		uint16_t f = r.sta[r.list_page * PER_PAGE + id - L_CHIP].f;
 		int i = fav_index(f), free_slot = 0;
-		for (int k = 0; k < NFAV; k++) if (!r.fav[k].f) free_slot = 1;
+		for (int k = 0; k < NFAV; k++) if (!cfg.fav[k].f) free_slot = 1;
 		r.pop_f = f; r.pop_i = i;
 		r.pop = i >= 0 ? POP_REMOVE : free_slot ? POP_ADD : POP_FULL;
 		return 1;
 	}
-	if (!r.list_open && id >= B_F1 && id <= B_F6 && r.fav[id - B_F1].f) {
-		r.pop_i = id - B_F1; r.pop_f = r.fav[r.pop_i].f; r.pop = POP_REMOVE;
+	if (!r.list_open && id >= B_F1 && id <= B_F6 && cfg.fav[id - B_F1].f) {
+		r.pop_i = id - B_F1; r.pop_f = cfg.fav[r.pop_i].f; r.pop = POP_REMOVE;
 		return 1;
 	}
 	return 0;
@@ -364,7 +369,7 @@ int radio_knob(int dir)
 	int cur = fav_index(tuner.freq);
 	for (int k = 1; k <= NFAV; k++) {
 		int i = ((cur < 0 ? (dir > 0 ? -1 : 0) : cur) + dir * k + 2 * NFAV) % NFAV;
-		if (r.fav[i].f) { tuner_tune(r.fav[i].f); return 1; }
+		if (cfg.fav[i].f) { tuner_tune(cfg.fav[i].f); return 1; }
 	}
 	say("No favorites yet: hold a station in the list", 0, 0);
 	return 1;
@@ -374,6 +379,7 @@ int radio_tick(void)
 {
 	if (!r.opened || r.init_err) return 0;
 	int c = tuner_poll();
+	if (!tuner.busy && !r.scanning && tuner.freq) cfg.freq = tuner.freq;   /* last station, saved by settings.c */
 	if (r.ring_until && (int32_t)(millis() - r.ring_until) >= 0) { r.ring_until = 0; r.knob = KNOB_VOLUME; c |= 1; }
 	if (c == 2 && r.scanning) {
 		logf("radio: seek stop %u valid %u limit %u RSSI %u SNR %u\n",

@@ -677,3 +677,26 @@ program into the boot firmware (`tools/fel/dram/tuner.c`, `radio_ui.c`):
   ended; `CE` answer, `CF` reject, `CG` hang up.
 - `calltest.c` (auto-answer, source command, input sweep) is kept for future
   call debugging.
+
+**Saved settings (2026-11-27).**
+- **What's saved:** volume, mute, last source, last station, the 6 favorites
+  (with room for names) and the key LED colour. They live in **the last 4 KB of
+  our slot (`0x12F000`)** and survive a power cycle.
+- **Booting:** the unit boots into the last source's page (Radio or Bluetooth).
+- **`spinor.c`:** our own SPI0 flash driver, at 4 MHz.
+  - Reads may go anywhere.
+  - **Erase and program refuse any address outside the settings sector.**
+  - It sets the controller up per operation and restores it after, because
+    leaving it changed wedged xfel's flash helper under FEL.
+  - Checked against xfel: the same 4 KB gives the same hash.
+- **`settings.c`:** a `HSET` header with a CRC32. A bad or blank sector means
+  defaults. Modules just change `cfg`, and it's written 3 s after the last
+  change, so a knob spin is one write.
+- **Firmware limit:** now 60 KB (`FW_APP_MAX`; `mkfw.py` enforces it; boot0's
+  own limit is unchanged).
+- **`fw-write.sh`:** erases only `0x120000`–`0x12F000` and fails the verify if
+  the settings sector changed.
+- **Tested:** settings saved under FEL; the sector decoded (CRC good); after
+  power cycles the unit came back with volume, station and favorites, and on
+  the right page both ways.
+- **Also:** a volume number above the bar.

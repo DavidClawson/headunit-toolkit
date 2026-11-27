@@ -11,6 +11,8 @@
 
 #define FW_SECTOR      0x900                 /* 0x120000 / 512 */
 #define FW_MAX         (0x10000 - 512)       /* program bytes that fit in the slot */
+#define FW_APP_MAX     (0xF000 - 512)        /* what mkfw.py builds: the slot's last 4 KB is settings */
+#define FW_SETTINGS    0x12F000              /* settings sector (dram/settings.c); never erased by fw-write.sh */
 #define FW_MAGIC       0x57465548            /* "HUFW" little-endian */
 #define FW_VERSION     1
 #define FW_LOAD        0x40000000
