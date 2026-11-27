@@ -523,3 +523,14 @@ amp's standby/mute is driven by the MCU or by the sound processor's output stage
 not by a pin the app names. Next evidence: the amp
 chip's marking, and the mute frame stock sends the MCU (from `init.axf`
   around `CSystemSetup_MuteOn`; we can't watch stock's UART TX live).
+
+**Radio audio, first attempt (2026-11-26/27, `tools/fel/dram/radio.c`).** Stock
+plays 101.1 MHz from the rear RCA (checked through a USB line-in). From FEL: `A7
+[04 00]` (source = Radio) alone gets no reply. After `A0` the MCU answers with
+its version (`AB5301_20260106_2125W`), BT status text (`81 D4`), `A6`/`B9`/`BF`
+frames and the heartbeat, and acks `A7` (`02 80 A7 01 00 26`). TWI1 stays empty
+at every address even then, with PB5 pulsed. The app's `radioModule=0` driver is
+an Si4730 at `0x11`, but the board's tuner-module footprint is empty, so the
+radio on this build probably isn't that I2C tuner. As before, `A0` led to a reset
+a couple of minutes later (heartbeat unanswered); the unit came back up in ours.
+`twi.c` now sets up the TWI1 and TWI2 pins too.

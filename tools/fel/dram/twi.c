@@ -45,6 +45,16 @@ static void sel(unsigned bus) { base = 0x02502000u + 0x400u * bus; }
 
 void twi_init(unsigned bus)
 {
+	if (bus == 1) {                /* PG14 SCL, PB04 SDA: function 4, pull-up (radio tuner) */
+		wr32(0x02000124, (rd32(0x02000124) & ~(0xFu << 24)) | (4u << 24));
+		wr32(0x02000144, (rd32(0x02000144) & ~(3u << 28)) | (1u << 28));
+		wr32(0x02000030, (rd32(0x02000030) & ~(0xFu << 16)) | (4u << 16));
+		wr32(0x02000054, (rd32(0x02000054) & ~(3u << 8)) | (1u << 8));
+	}
+	if (bus == 2) {                /* PE12 SCL, PE13 SDA: function 2, pull-up (sound processor, MFi, camera) */
+		wr32(0x020000C4, (rd32(0x020000C4) & ~(0xFFu << 16)) | (2u << 16) | (2u << 20));
+		wr32(0x020000E4, (rd32(0x020000E4) & ~(0xFu << 24)) | (1u << 24) | (1u << 26));
+	}
 	if (bus == 3) {                /* PG10 SCL, PG11 SDA: function 3, pull-up */
 		wr32(0x02000124, (rd32(0x02000124) & ~(0xFFu << 8)) | (3u << 8) | (3u << 12));
 		wr32(0x02000144, (rd32(0x02000144) & ~(0xFu << 20)) | (1u << 20) | (1u << 22));
