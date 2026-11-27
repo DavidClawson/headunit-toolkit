@@ -17,6 +17,7 @@
 #include "musb.h"
 #include "display.h"
 #include "gfx.h"
+#include "twi.h"
 
 #define USB0      0x04100000u
 #define FIFO0     (USB0 + 0x00)
@@ -294,6 +295,82 @@ static void become_device(void)
 	devctl_dev = rd8(DEVCTL);
 }
 
+/* ---- Apple MFi 3.0 coprocessor (TWI2, 0x10): certificate and challenge signing ----
+   The chip wants: write the register address, STOP, then a separate read; it NACKs
+   while busy, so retry. Registers: 0x10 control/status, 0x11 signature length,
+   0x12 signature, 0x20 challenge length, 0x21 challenge, 0x30 certificate length,
+   0x31.. certificate (128 bytes per register). The certificate is unique to the
+   unit: it goes only to the phone and is never shown or logged. */
+#define MFI 0x10
+static uint8_t mfi_ver, mfi_proto;
+static int cert_len, mfi_err, mfi_stage, mfi_len_read;
+static uint8_t cert[1024];
+static int sig_len, sig_ms, sig_status = -1;
+static uint8_t sig[128];
+
+static int mfi_last;                      /* last I2C error (TWI_*) */
+static int mfi_rd(uint8_t reg, uint8_t *b, int n)
+{
+	for (int w = 0; w < 10; w++) {                       /* set the register pointer (the chip NACKs while busy) */
+		if ((mfi_last = twi_write(2, MFI, reg, 1, 0, 0)) != TWI_OK) { udelay(2000); continue; }
+		for (int i = 0; i < 100; i++) {                  /* then retry only the read, up to ~100 ms */
+			udelay(1000);
+			if ((mfi_last = twi_read(2, MFI, 0, 0, b, (unsigned)n)) == TWI_OK) return 0;
+		}
+	}
+	mfi_err++;
+	return -1;
+}
+static int mfi_wr(uint8_t reg, const uint8_t *b, int n)
+{
+	for (int i = 0; i < 40; i++) {
+		if (twi_write(2, MFI, reg, 1, b, (unsigned)n) == TWI_OK) return 0;
+		udelay(2000);
+	}
+	mfi_err++;
+	return -1;
+}
+static void mfi_init(void)
+{
+	uint8_t b[2];
+	twi_init(2);
+	twi_timeout_us = 50000;                              /* the chip may stretch the clock while it fetches */
+	if (!mfi_rd(0x00, b, 1)) mfi_ver = b[0];
+	if (!mfi_rd(0x02, b, 1)) mfi_proto = b[0];
+	mfi_stage = 1;                                       /* 1: length read failed */
+	if (mfi_rd(0x30, b, 2)) return;
+	mfi_len_read = b[0] << 8 | b[1];
+	mfi_stage = 2;                                       /* 2: length too big */
+	if (mfi_len_read > (int)sizeof cert) return;
+	for (int off = 0, r = 0x31; off < mfi_len_read; off += 128, r++) {
+		mfi_stage = 0x31 == r ? 0x31 : r;                /* 0x3n: reading that register failed */
+		if (mfi_rd((uint8_t)r, cert + off, mfi_len_read - off < 128 ? mfi_len_read - off : 128)) return;
+	}
+	mfi_stage = 0;
+	cert_len = mfi_len_read;
+}
+static int mfi_sign(const uint8_t *ch, int n)
+{
+	uint8_t b[2] = { (uint8_t)(n >> 8), (uint8_t)n }, st = 0;
+	mfi_wr(0x20, b, 2);                                  /* challenge length (fixed at 32 on 3.0 chips) */
+	if (mfi_wr(0x21, ch, n)) return -1;
+	uint8_t go = 1;
+	if (mfi_wr(0x10, &go, 1)) return -1;                 /* start signature generation */
+	uint32_t t0 = millis();
+	for (;;) {
+		udelay(5000);
+		if (!mfi_rd(0x10, &st, 1) && ((st >> 4) & 7)) break;
+		if (millis() - t0 > 3000) return -2;
+	}
+	sig_ms = (int)(millis() - t0);
+	sig_status = st;
+	if (((st >> 4) & 7) != 1) return -3;                 /* 1 = signature generated */
+	if (mfi_rd(0x11, b, 2)) return -1;
+	sig_len = b[0] << 8 | b[1];
+	if (sig_len > (int)sizeof sig) return -4;
+	return mfi_rd(0x12, sig, sig_len);
+}
+
 /* ---- iAP2 link layer (just enough to open a link) ----
    Packet: FF 5A, length (BE, whole packet), control, seq, ack, session, header
    checksum, then payload + payload checksum (each checksum makes its bytes sum to 0).
@@ -314,8 +391,9 @@ static uint8_t sum8(const uint8_t *p, int n) { uint8_t s = 0; while (n--) s += *
 
 static void link_send(uint8_t ctl, uint8_t sess, const uint8_t *pl, int n)
 {
-	static uint8_t o[64];
+	static uint8_t o[1200];
 	int len = 9 + (n ? n + 1 : 0);
+	if (len > (int)sizeof o) return;
 	o[0] = 0xFF; o[1] = 0x5A; o[2] = (uint8_t)(len >> 8); o[3] = (uint8_t)len;
 	o[4] = ctl; o[5] = my_seq; o[6] = (ctl & 0x40) ? their_seq : 0; o[7] = sess;
 	o[8] = sum8(o, 8);
@@ -324,6 +402,36 @@ static void link_send(uint8_t ctl, uint8_t sess, const uint8_t *pl, int n)
 }
 
 static void iap2_reset(void) { ls = 0; irx_n = 0; syn_tries = 0; }
+
+/* one control-session message: 40 40, length, id, then parameters (length, id, data) */
+static int n_sent_msgs;
+static void send_msg(uint16_t id, uint16_t pid, const uint8_t *data, int n)
+{
+	static uint8_t m[1100];
+	int len = 6 + 4 + n;
+	if (len > (int)sizeof m) return;
+	m[0] = 0x40; m[1] = 0x40; m[2] = (uint8_t)(len >> 8); m[3] = (uint8_t)len; m[4] = (uint8_t)(id >> 8); m[5] = (uint8_t)id;
+	m[6] = (uint8_t)((n + 4) >> 8); m[7] = (uint8_t)(n + 4); m[8] = (uint8_t)(pid >> 8); m[9] = (uint8_t)pid;
+	memcpy(m + 10, data, n);
+	my_seq++;
+	link_send(0x40, IAP_SESS, m, len);
+	n_sent_msgs++;
+}
+
+static int auth_result;                   /* 0 none, 1 succeeded (AA05), -1 failed (AA04), -2 chip error */
+static void on_message(const uint8_t *m, int n)
+{
+	uint16_t id = (uint16_t)(m[4] << 8 | m[5]);
+	if (id == 0xAA00) {                                  /* RequestAuthenticationCertificate */
+		if (cert_len) send_msg(0xAA01, 0, cert, cert_len);
+		else auth_result = -2;
+	} else if (id == 0xAA02 && n >= 10) {                /* RequestAuthenticationChallengeResponse */
+		int pl = (m[6] << 8 | m[7]) - 4;
+		if (pl > 0 && 10 + pl <= n && mfi_sign(m + 10, pl) == 0) send_msg(0xAA03, 0, sig, sig_len);
+		else auth_result = -2;
+	} else if (id == 0xAA05) auth_result = 1;
+	else if (id == 0xAA04) auth_result = -1;
+}
 
 static void send_syn(void)
 {
@@ -368,6 +476,7 @@ static void on_link_packet(const uint8_t *p, int len)
 			for (int i = 5; i > 0; i--) { msg_ids[i] = msg_ids[i - 1]; msg_len[i] = msg_len[i - 1]; }
 			msg_ids[0] = (uint16_t)(m[4] << 8 | m[5]); msg_len[0] = (uint16_t)(m[2] << 8 | m[3]);
 			n_msgs++;
+			on_message(m, pn);
 		}
 	}
 }
@@ -479,6 +588,14 @@ static void status(void)
 		p = str_cat(p, musb_high_speed() ? "  high speed" : "");
 		gfx_text(30, 240, s, &font16x32, 1, g_config ? 0x40ff60 : 0xffc040);
 	}
+	p = str_cat(s, "MFi v"); p = hexn(p, mfi_ver, 2); p = str_cat(p, " proto "); p = str_u(p, mfi_proto);
+	p = str_cat(p, "  len "); p = str_u(p, (uint32_t)mfi_len_read); p = str_cat(p, "  cert "); p = str_u(p, (uint32_t)cert_len);
+	if (mfi_stage) { p = str_cat(p, "  FAILED at "); p = hexn(p, (uint32_t)mfi_stage, 2); }
+	p = str_cat(p, "  i2c errs "); p = str_u(p, (uint32_t)mfi_err); *p++ = '/'; p = str_u(p, (uint32_t)mfi_last);
+	p = str_cat(p, "  sent "); p = str_u(p, (uint32_t)n_sent_msgs);
+	if (sig_status >= 0) { p = str_cat(p, "  sig "); p = str_u(p, (uint32_t)sig_len); p = str_cat(p, "B/"); p = str_u(p, (uint32_t)sig_ms); p = str_cat(p, "ms"); }
+	p = str_cat(p, auth_result == 1 ? "  AUTH OK" : auth_result == -1 ? "  AUTH FAILED" : auth_result == -2 ? "  CHIP ERROR" : "");
+	gfx_text(30, 506, s, &font16x32, 1, auth_result == 1 || (cert_len && !auth_result) ? 0x40ff60 : (auth_result < 0 || mfi_stage) ? 0xff6060 : 0xffffff);
 	if (have_dev) {
 		p = str_cat(s, "phone "); p = hexn(p, devd[8] | devd[9] << 8, 4); *p++ = ':'; p = hexn(p, devd[10] | devd[11] << 8, 4);
 		p = str_cat(p, "  \""); p = str_cat(p, manu); p = str_cat(p, "\" \""); p = str_cat(p, prod); p = str_cat(p, "\"");
@@ -507,12 +624,13 @@ static void status(void)
 		p = str_cat(s, "NCM: "); p = str_cat(p, ncm_on ? "up" : "down"); p = str_cat(p, "  frames "); p = str_u(p, n_frames);
 		p = str_cat(p, "  bad "); p = str_u(p, n_ntb_bad); p = str_cat(p, "  types ");
 		for (int i = 0; i < 4; i++) { p = hexn(p, types[i], 4); *p++ = ' '; *p = 0; }
-		gfx_text(30, 472, s, &font16x32, 1, n_frames ? 0x40ff60 : 0xffffff);
+		gfx_text(30, 544, s, &font16x32, 1, n_frames ? 0x40ff60 : 0xffffff);
 		uint8_t rq[6][8];                                /* the phone's recent requests to us */
 		int n = musb_recent(rq, 6);
 		for (int i = 0; i < n; i++) {
 			p = s; for (int j = 0; j < 8; j++) { p = hexn(p, rq[i][j], 2); *p++ = ' '; *p = 0; }
-			gfx_text(30 + (i / 3) * 480, 516 + (i % 3) * 30, s, &font16x32, 1, 0xa0c0ff);
+			gfx_text(30 + i * 480, 580, s, &font16x32, 1, 0xa0c0ff);
+			if (i == 1) break;
 		}
 	}
 	dcache_flush();
@@ -588,6 +706,7 @@ int main(void)
 	__asm__ volatile("csrw mtvec, %0" :: "r"(cp_trap_entry));
 	__asm__ volatile("csrci mstatus, 8\n\tcsrw mie, zero");   /* keep the boot ROM's USB handler out */
 
+	mfi_init();                                          /* certificate ready before the phone asks */
 	/* host mode with USB-A's 5 V on, as in iphonetest.c */
 	wr32(0x02000098, (rd32(0x02000098) & ~(0xFu << 8)) | (1u << 8));    /* PD18 output */
 	wr32(0x020000A0, rd32(0x020000A0) | (1u << 18));                    /* PD18 high: VBUS on */

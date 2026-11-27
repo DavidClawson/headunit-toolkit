@@ -934,3 +934,34 @@ packet 65535. One SYN was enough, with no RSTs and no checksum errors.
 Its first control message is **`AA00` RequestAuthenticationCertificate**
 (6 bytes, no parameters). Answering it needs the MFi coprocessor's
 certificate (the chip on `twi2`, address 0x10).
+
+**iAP2 authentication succeeds with the unit's own MFi chip (2026-11-27).**
+The coprocessor on TWI2 (`0x10`) is an MFi 3.0 part: device version `0x07`,
+protocol 3.0, and a 607-byte certificate.
+
+The chip needs this access pattern:
+1. Write the register address, then STOP.
+2. Keep retrying **only the read** until the chip ACKs. It NACKs while busy;
+   the certificate-length read takes a few ms.
+3. Don't re-send the pointer on each retry. That restarts the chip's work, so
+   the earlier code never got past register `0x30`.
+
+Signing uses the challenge at `0x21` and start bit `0x10` = 1. It then polls
+`0x10` until status (bits 4–6) = 1, and reads the length at `0x11` and the
+signature at `0x12`. It takes about 390 ms. `twi.c` gained `twi_timeout_us`
+for long clock-stretches.
+
+On the bench, `carplaytest.c` answers each iPhone message as follows:
+
+| Phone sends | We reply |
+|---|---|
+| `AA00` | `AA01` with the certificate (param 0) |
+| `AA02` (32-byte challenge) | `AA03` with the 64-byte signature (param 0) |
+
+The phone then sends **`AA05` AuthenticationSucceeded**, followed by **`1D00`
+StartIdentification**.
+
+The certificate is sent only to the phone and is never logged.
+
+**Next:** IdentificationInformation (`1D01`), which declares what the accessory
+supports. CarPlay over USB needs its own component.
