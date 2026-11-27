@@ -111,9 +111,44 @@ int audio_init(void)
 	return 0;
 }
 
+static struct { const uint8_t *d; uint32_t len, pos, step; int32_t gl, gr; } pcm[AUDIO_PCM_VOICES];
+
+static void gains(int ch, int vol, int sep)
+{
+	if (vol < 0) vol = 0;
+	if (vol > 127) vol = 127;
+	if (sep < 0) sep = 0;
+	if (sep > 254) sep = 254;
+	pcm[ch].gl = vol * (254 - sep) / 127;          /* 0..254 */
+	pcm[ch].gr = vol * sep / 127;
+}
+void audio_pcm_start(int ch, const uint8_t *data, uint32_t len, uint32_t rate, int vol, int sep)
+{
+	if (ch < 0 || ch >= AUDIO_PCM_VOICES) return;
+	pcm[ch].len = 0;
+	gains(ch, vol, sep);
+	pcm[ch].d = data;
+	pcm[ch].pos = 0;
+	pcm[ch].step = (uint32_t)(((uint64_t)rate << 16) / 48000u);
+	pcm[ch].len = len;
+}
+void audio_pcm_params(int ch, int vol, int sep) { if (ch >= 0 && ch < AUDIO_PCM_VOICES) gains(ch, vol, sep); }
+void audio_pcm_stop(int ch) { if (ch >= 0 && ch < AUDIO_PCM_VOICES) pcm[ch].len = 0; }
+int audio_pcm_playing(int ch) { return ch >= 0 && ch < AUDIO_PCM_VOICES && pcm[ch].len; }
+
+static int32_t pcm_r;                     /* right channel of the last mix() */
 static int16_t mix(void)
 {
-	int32_t s = 0;
+	int32_t s = 0, l = 0, r = 0;
+	for (int i = 0; i < AUDIO_PCM_VOICES; i++) {
+		if (!pcm[i].len) continue;
+		uint32_t k = pcm[i].pos >> 16;
+		if (k >= pcm[i].len) { pcm[i].len = 0; continue; }
+		int32_t x = ((int32_t)pcm[i].d[k] - 128) * 256;            /* 8-bit unsigned -> 16-bit */
+		l += x * pcm[i].gl / 254 / 2;                               /* /2: headroom for several */
+		r += x * pcm[i].gr / 254 / 2;
+		pcm[i].pos += pcm[i].step;
+	}
 	for (int i = 0; i < NV; i++) {
 		if (!v[i].left) continue;
 		uint32_t done = v[i].total - v[i].left, ramp = 48 * 3;  /* 3 ms fade in/out */
@@ -124,9 +159,13 @@ static int16_t mix(void)
 		s += sine256[(v[i].phase >> 16) & 255] * v[i].level / 256 * env / 256;
 		v[i].left--;
 	}
-	if (s > 32767) s = 32767;
-	if (s < -32768) s = -32768;
-	return (int16_t)s;
+	l += s; r += s;
+	if (r > 32767) r = 32767;
+	if (r < -32768) r = -32768;
+	pcm_r = r;
+	if (l > 32767) l = 32767;
+	if (l < -32768) l = -32768;
+	return (int16_t)l;
 }
 
 void audio_service(void)
@@ -147,7 +186,7 @@ void audio_service(void)
 	if (wabs >= target) return;
 	while (wabs < target) {
 		int16_t s = mix();
-		ring[wabs % RING] = (uint16_t)s | ((uint32_t)(uint16_t)s << 16);
+		ring[wabs % RING] = (uint16_t)s | ((uint32_t)(uint16_t)pcm_r << 16);
 		wabs++;
 		audio_stats.frames++;
 	}

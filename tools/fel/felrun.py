@@ -29,6 +29,8 @@ def main():
     p.add_argument("program")
     p.add_argument("--ddr", action="store_true", help="re-run DRAM init even if marked done")
     p.add_argument("--timeout", type=float, default=120)
+    p.add_argument("--load", action="append", default=[], metavar="ADDR:FILE",
+                   help="write FILE to DRAM at ADDR before running (repeatable)")
     a = p.parse_args()
 
     print(xfel("version").strip())
@@ -38,6 +40,10 @@ def main():
         print("  " + (out.strip().replace("\n", "\n  ") if out.strip() else "done"))
         xfel("write32", hex(MARK), hex(MARK_VAL))
 
+    for spec in a.load:
+        addr, path = spec.split(":", 1)
+        print(f"loading {path} ({os.path.getsize(path)} bytes) at {addr}")
+        xfel("write", addr, path)
     xfel("write", hex(LOAD), a.program)
     t0 = time.perf_counter()
     xfel("exec", hex(LOAD))

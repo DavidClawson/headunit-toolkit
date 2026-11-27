@@ -13,6 +13,9 @@ _start:
 	sd	tp, 24(t0)
 	sd	s0, 32(t0)
 	sd	s1, 40(t0)
+	li	t0, 0x2000                 /* mstatus.FS = initial: the FPU on */
+	csrs	mstatus, t0
+	fscsr	zero
 	la	sp, __stack_top
 	.option push
 	.option norelax
