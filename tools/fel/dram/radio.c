@@ -3,8 +3,9 @@
  * to flash. Sequence, from the stock app (init.axf, see docs/radio.md):
  *   1. MCU source = Radio: 02 80 A7 02 04 00 21 on UART1 (believed to power
  *      the tuner), then log what the MCU says for a second.
- *   2. TWI1 scan; Si4730 expected at 0x11 once powered.
- *   3. Si4730: reset (PB5 low 100 ms, high 50 ms), POWER_UP FM, GET_REV,
+ *   2. Reset pulse on PB5, then scan TWI1 on all three pin pairs the F133
+ *      offers (PE0/PE1, PG8/PG9, PB4/PB5); the Si4730 is expected at 0x11.
+ *   3. Si4730 on the pair that answers: POWER_UP FM, GET_REV,
  *      the app's 31 properties + blend, FM_TUNE_FREQ 101.1 MHz, tune status.
  *   4. BD3702 (TWI2 0x40): the app's init table, input 0x05 = 0x0B (radio),
  *      volume 0x20 = 0x8A (-10 dB).
@@ -126,24 +127,40 @@ int main(void)
 	logf(" B0 CE 01 (host up)\n"); mcu_send(0xB0, ce, 5); mcu_listen(300);
 	logf(" A7 04 00 (radio)\n"); mcu_send(0xA7, src, 2); mcu_listen(3000);
 
-	logf("2. scan\n");
-	twi_init(1);
-	twi_init(2);
-	scan(1);
-	scan(2);
-
-	logf("3. Si4730\n");
+	logf("2. reset pulse on PB5 (the config's radioResetGpio), then TWI1 on all three pin pairs\n");
 	wr32(0x02000030, (rd32(0x02000030) & ~(0xFu << 20)) | (1u << 20));   /* PB5 output */
 	wr32(0x02000040, rd32(0x02000040) & ~(1u << 5));
 	udelay(100000);
 	wr32(0x02000040, rd32(0x02000040) | (1u << 5));
 	udelay(50000);
-	scan(1);
+	static const char *pname[3] = { "PB4/PB5", "PE0/PE1", "PG8/PG9" };
+	static const unsigned order[3] = { 1, 2, 0 };   /* PB last: it turns PB5 into SDA */
+	int found = -1;
+	twi_init(2);
+	for (unsigned k = 0; k < 3; k++) {
+		unsigned pr = order[k];
+		twi1_route(pr);
+		twi_ctrl_init(1);
+		logf("  TWI1 on %s, lines idle %s:", pname[pr],
+		     pr == 0 ? ((rd32(0x02000040) >> 4 & 3) == 3 ? "high" : "LOW")
+		   : pr == 1 ? ((rd32(0x020000D0) & 3) == 3 ? "high" : "LOW")
+		             : ((rd32(0x02000130) >> 8 & 3) == 3 ? "high" : "LOW"));
+		unsigned n = 0;
+		for (unsigned a = 0x08; a < 0x78; a++)
+			if (twi_write(1, (uint8_t)a, 0, 0, 0, 0) == TWI_OK) { logf(" %02x", a); n++; }
+		logf(n ? "\n" : " nothing\n");
+		if (n && found < 0) found = (int)pr;
+		if (pr != 0 && n) break;        /* keep PB5 as the reset line if the tuner is elsewhere */
+	}
+	scan(2);
+	if (found < 0) { logf("  no device on any TWI1 pin pair: skipping to the sound processor\n"); goto sound; }
+	logf("3. Si4730 on %s\n", pname[found]);
+	twi1_route((unsigned)found);
 	for (int i = 0; i < 50 && twi_write(1, SI, 0, 0, 0, 0) != TWI_OK; i++) udelay(100000);
 	static const uint8_t pu[3] = { 0x01, 0xD0, 0x05 };
 	int e = si_cmd(pu, 3, 0, 0);
 	logf("  POWER_UP: %d\n", e);
-	if (e) { logf("  no tuner on TWI1 (expected on this board): skipping to the sound processor\n"); goto sound; }
+	if (e) { logf("  device found but POWER_UP failed: skipping to the sound processor\n"); goto sound; }
 	udelay(200000);
 	uint8_t r[9] = {0};
 	static const uint8_t rev[1] = { 0x10 };
