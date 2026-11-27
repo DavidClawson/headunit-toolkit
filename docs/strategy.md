@@ -38,7 +38,12 @@ truth, board by board.
 modules, and direct hardware access. A few dozen mostly basic services
 (threads, memory, files) make B realistic. Hundreds of calls, or deep driver
 dependencies (USB, video decode, display layers), make A the practical route.
-Results: [carplay-inventory.md](carplay-inventory.md) (in progress).
+Result ([carplay-inventory.md](carplay-inventory.md)): the modules use only 52
+basic kernel services and no hardware directly; the heavy parts (USB, H.264
+decode, display, audio, WiFi) are services their host provides through
+callbacks. **Decision: Option A now** (our app replaces `init.axf` on Melis and
+reuses its drivers), **Option B kept open** (the narrow interface lets us swap
+the layers underneath one subsystem at a time later).
 
 Either way, the hardware layer we're building (display, touch, MCU, audio, USB)
 is needed, so Track 2 work isn't wasted.

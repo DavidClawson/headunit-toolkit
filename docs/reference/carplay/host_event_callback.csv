@@ -1,0 +1,18 @@
+type,module_side (carplay.mod fn),init.axf handler,meaning,device/module touched by host,confidence
+0,0xe8874a44 DecoderInit w h,0xe920ffc6,video decoder open (w,h),"cedar.mod via robin raw-stream (XXX.H264) or oak.mod (absent) + display video layer, /dev/g2d",confirmed
+1,0xe8874b0c DecoderUninit,0xe920fff8,video decoder close,cedar.mod/robin,confirmed
+2,0xe8874b4a ScreenStreamProcessData,0xe9210028,H.264 access unit (buf,len) -> robin_write_buffer,cedar.mod -> vdecoder.drv,confirmed
+3,0xe8874bb6,0xe921020e,audio out open (ch,fs,bps),/dev/audio_play6 (+ /dev/audio_play1 hub mode),confirmed
+4,0xe8874c00,0xe921034a,audio out close,-,confirmed
+5,0xe8874bdc AudioOutputThread,0xe92103fc,audio out write PCM,/dev/audio_play6 write(),inferred
+6,0xe8874c20,0xe921044c,mic open (ch,fs,bps,gain),/dev/audio_rec4 or rec0 (+ /dev/audio_rec1),confirmed
+7,0xe8874c9a,0xe92105e0,mic close,-,confirmed
+8,0xe8874c78,0xe9210692,mic read PCM,/dev/audio_recN read(),inferred
+9,0xe8874d1a _AirPlayHandleRequestUI,(ignored),request accessory UI,-,confirmed
+10,0xe8874d38 Disable BT session,(ignored),BT session control,-,confirmed
+11,0xe8874e8e StatusNotify,0xe921648a,status codes 2..28 -> UI messages,-,confirmed
+12,0xe8874cb8,0xe921098a,AEC open,/dev/audio_aec,confirmed
+13,0xe8874cd6,0xe9210a76,AEC close,-,inferred
+14,0xe8874cf4,0xe9210ab4,AEC data/config (4 args),-,inferred
+15,0xe8875054,0xe92111a0,(2 args) misc notify,-,unknown
+16,0xe8875076 time %d-%d-%d,0xe91aaec8,set RTC date/time from phone,-,inferred
