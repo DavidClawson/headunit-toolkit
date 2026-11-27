@@ -36,7 +36,8 @@ static struct {
 	int hold_left;       /* seconds left on the countdown shown */
 	char status[96];
 	uint32_t press_ms;   /* when the current press started */
-} st = { -1, 0, -1, 0, 0, 0, "", 0 };
+	int hold_fired;      /* the current press already counted as a hold */
+} st = { -1, 0, -1, 0, 0, 0, "", 0, 0 };
 
 #define BAR_H 64
 #define HOLD_MS 3000
@@ -155,9 +156,12 @@ static int handle(const event *e)
 			st.hold_t0 = 0;                          /* slid off the bar: cancel */
 			return 1;
 		}
-		int p = home ? home_hit(e->x, e->y) : in_back(e->x, e->y) ? 0 :
-		        st.page == 0 ? radio_hit(e->x, e->y) : -1;
-		if (e->type == EV_TOUCH_DOWN) st.press_ms = e->ms;
+		if (e->type == EV_TOUCH_MOVE && st.hold_fired) return 0;   /* a hold took this touch */
+		int p = home ? home_hit(e->x, e->y) :
+		        st.page == 0 && radio_modal() ? radio_hit(e->x, e->y) :
+		        in_back(e->x, e->y) ? 0 : st.page == 0 ? radio_hit(e->x, e->y) : -1;
+		if (e->type == EV_TOUCH_DOWN) { st.press_ms = e->ms; st.hold_fired = 0; }
+		else if (p != st.pressed) { st.press_ms = e->ms; st.hold_fired = 0; }   /* slid onto another button */
 		if (p == st.pressed) return e->type == EV_TOUCH_DOWN;
 		st.pressed = p;
 		return 1;
@@ -167,7 +171,7 @@ static int handle(const event *e)
 		if (st.pressed >= 0) {
 			if (home) { st.focus = st.pressed; st.page = st.pressed; if (st.page == 0) radio_open(); }
 			else if (st.pressed == 0) st.page = -1;
-			else if (st.page == 0) radio_press(st.pressed, e->ms - st.press_ms);
+			else if (st.page == 0 && !st.hold_fired) radio_press(st.pressed);
 		}
 		st.pressed = -1;
 		return 1;
@@ -216,6 +220,11 @@ int main(void)
 			}
 			int left = (int)((HOLD_MS - held + 999) / 1000);
 			if (left != st.hold_left) { st.hold_left = left; dirty = 1; }
+		}
+		if (st.page == 0 && st.pressed > 0 && !st.hold_fired &&
+		    millis() - input_t0() - st.press_ms >= RADIO_HOLD_MS) {
+			st.hold_fired = 1;
+			if (radio_hold(st.pressed)) { st.pressed = -1; dirty = 1; }   /* the popup takes over */
 		}
 		dirty |= radio_tick() && st.page == 0;
 		int b = now_ms() < st.banner_until || (st.page == 0 && radio_note());
