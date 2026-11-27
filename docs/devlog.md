@@ -485,3 +485,13 @@ bars drawn straight into the visible buffer show cuts.
 `input.c` (touch and keys in one queue) + `app.c`. The knob moves a focus ring
 and opens pages, taps open tiles and go back, the phone key shows a banner.
 Everything works and feels instant. This is the skeleton of the firmware.
+
+**Booting our firmware, step 1 (offline build):** a boot selector in the boot0
+patch (`sel`, hooked at boot0's Melis load, reusing boot0's flash driver), an
+image format at NOR `0x120000` (`mkfw.py`), and the firmware side (`fw.c`:
+watchdog hand-off, "boot stock once"). The stock escape is holding the status
+bar for 3 s, because the MCU doesn't report key holds (one frame per press).
+Tested under FEL: the hold counts down, cancels on lift, and reboots into
+stock. Also learned: calling boot0's flash driver from a FEL session hangs the
+USB link, and RTC GP registers don't survive a power cycle. Nothing written to
+the flash yet.

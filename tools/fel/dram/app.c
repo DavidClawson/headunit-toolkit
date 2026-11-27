@@ -6,8 +6,10 @@
  *   knob CW/CCW: move the focus ring    knob push: open the focused tile
  *   tap a tile: open it                 "< Back" (or knob push) on a page: return
  *   phone key: banner for 2 s
+ *   hold the status bar 3 s: reboot into stock firmware once (fw.c)
  *
- *   felrun.py dram/app.bin --timeout 120
+ * Under FEL it runs 60 s and returns:   felrun.py dram/app.bin --timeout 120
+ * As boot firmware (mkfw.py app.bin -> NOR 0x120000) it runs forever.
  */
 #include "lib.h"
 #include "display.h"
@@ -15,6 +17,7 @@
 #include "home.h"
 #include "input.h"
 #include "mcu.h"
+#include "fw.h"
 
 #define SECONDS 60
 
@@ -23,8 +26,13 @@ static struct {
 	int focus;           /* focused tile on home */
 	int pressed;         /* tile (home) or 0 = back button (page) held down, -1 none */
 	uint32_t banner_until;
+	uint32_t hold_t0;    /* finger down on the status bar since (ms), 0 = no */
+	int hold_left;       /* seconds left on the countdown shown */
 	char status[96];
-} st = { -1, 0, -1, 0, "" };
+} st = { -1, 0, -1, 0, 0, 0, "" };
+
+#define BAR_H 64
+#define HOLD_MS 3000
 
 static const uint32_t page_col[HOME_TILES] = { 0xd9480f, 0x1971c2, 0x2f9e44, 0x6741d9 };
 #define BACK_X 24
@@ -34,6 +42,19 @@ static const uint32_t page_col[HOME_TILES] = { 0xd9480f, 0x1971c2, 0x2f9e44, 0x6
 
 static uint32_t now_ms(void) { return ticks() / (1000 * TICKS_PER_US); }
 
+static void status_bar(void)
+{
+	gfx_fill(0, 0, GW, BAR_H, st.hold_t0 ? 0x5c1a1a : 0x0b1222);
+	gfx_text(32, 16, "HEADUNIT", &font16x32, 1, 0xffffff);
+	if (st.hold_t0) {
+		char s[48], *p = str_cat(s, "keep holding: stock firmware in ");
+		p = str_u(p, (unsigned)st.hold_left); str_cat(p, " s");
+		gfx_text(GW - 32 - gfx_text_w(s, &font16x32, 1), 16, s, &font16x32, 1, 0xffffff);
+	} else
+		gfx_text(GW - 32 - gfx_text_w(fw_booted() ? "NOR" : "FEL", &font16x32, 1), 16,
+		         fw_booted() ? "NOR" : "FEL", &font16x32, 1, 0x8aa0c8);
+}
+
 static void draw(void)
 {
 	if (st.page < 0) {
@@ -42,11 +63,11 @@ static void draw(void)
 		int x, y, w, h;
 		home_tile_rect(st.focus, &x, &y, &w, &h);
 		gfx_rring(x - 12, y - 12, w + 24, h + 24, 40, 5, 0xffffff);
+		status_bar();
 	} else {
 		uint32_t c = page_col[st.page];
 		gfx_vgrad(0, 0, GW, GH, gfx_mix(c, 0x000000, 120), 0x070a12);
-		gfx_fill(0, 0, GW, 64, 0x0b1222);
-		gfx_text(32, 16, "HEADUNIT", &font16x32, 1, 0xffffff);
+		status_bar();
 		gfx_rrect(BACK_X, BACK_Y, BACK_W, BACK_H, 20, st.pressed == 0 ? gfx_mix(c, 0xffffff, 90) : c);
 		gfx_text(BACK_X + 36, BACK_Y + 20, "< Back", &font16x32, 1, 0xffffff);
 		const char *n = home_tile_name(st.page);
@@ -95,12 +116,23 @@ static int handle(const event *e)
 		return 1;
 	case EV_TOUCH_DOWN:
 	case EV_TOUCH_MOVE: {
+		int on_bar = e->y < BAR_H;
+		if (on_bar && e->type == EV_TOUCH_DOWN) {
+			st.hold_t0 = e->ms ? e->ms : 1; st.hold_left = HOLD_MS / 1000; st.pressed = -1;
+			return 1;
+		}
+		if (st.hold_t0) {
+			if (on_bar) return 0;
+			st.hold_t0 = 0;                          /* slid off the bar: cancel */
+			return 1;
+		}
 		int p = home ? home_hit(e->x, e->y) : (in_back(e->x, e->y) ? 0 : -1);
 		if (p == st.pressed) return e->type == EV_TOUCH_DOWN;
 		st.pressed = p;
 		return 1;
 	}
 	case EV_TOUCH_UP:
+		if (st.hold_t0) { st.hold_t0 = 0; return 1; }
 		if (st.pressed >= 0) {
 			if (home) { st.focus = st.pressed; st.page = st.pressed; }
 			else st.page = -1;
@@ -114,16 +146,18 @@ static int handle(const event *e)
 int main(void)
 {
 	log_reset();
+	int nor = fw_init();
 	if (display_up(FB0)) { logf("app: display_up failed\n"); return 1; }
 	int ti = input_init();
+	fw_boot_ok();                                      /* up: the selector's watchdog can stand down */
 	str_cat(st.status, ti ? "touch not answering; keys only" : "ready: touch a tile or turn the knob");
-	logf("app: input_init %d\n", ti);
+	logf("app: input_init %d, %s\n", ti, nor ? "booted from NOR" : "under FEL");
 
 	uint32_t back = display_fb() == FB0 ? FB1 : FB0;
 	int dirty = 1, banner = 0;
 	unsigned events = 0, redraws = 0, worst = 0, logged = 0;
 	uint32_t t0 = ticks();
-	while (ticks() - t0 < SECONDS * 1000000u * TICKS_PER_US) {
+	while (nor || ticks() - t0 < SECONDS * 1000000u * TICKS_PER_US) {
 		event e;
 		while (input_next(&e)) {
 			events++;
@@ -133,6 +167,22 @@ int main(void)
 			}
 			if (e.type != EV_TOUCH_MOVE) describe(&e);
 			dirty |= handle(&e);
+		}
+		if (st.hold_t0) {
+			uint32_t held = (ticks() - input_t0()) / (1000 * TICKS_PER_US) - st.hold_t0;
+			if (held >= HOLD_MS) {
+				st.hold_t0 = 0;
+				gfx_target(back);
+				gfx_clear(0x000000);
+				const char *m = "Rebooting into stock firmware...";
+				gfx_text((GW - gfx_text_w(m, &font16x32, 1)) / 2, GH / 2 - 16, m, &font16x32, 1, 0xffffff);
+				display_flip(back);
+				logf("app: status bar held: rebooting to stock\n");
+				udelay(300000);
+				fw_boot_stock();
+			}
+			int left = (int)((HOLD_MS - held + 999) / 1000);
+			if (left != st.hold_left) { st.hold_left = left; dirty = 1; }
 		}
 		int b = now_ms() < st.banner_until;
 		if (b != banner) { banner = b; dirty = 1; }

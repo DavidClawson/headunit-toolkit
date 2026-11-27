@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
-"""mkboot0.py: build stock boot0 + FEL-window stub (see stub.S).
+"""mkboot0.py: build stock boot0 + FEL window + boot selector (see stub.S).
 
-    tools/fel/bootsel/mkboot0.py <nor-backup.bin> [-o boot0-felwin.bin]
+    tools/fel/bootsel/mkboot0.py <nor-backup.bin>                 # -> boot0-fw.bin
+    tools/fel/bootsel/mkboot0.py <nor-backup.bin> --no-selector  # FEL window only
 
 Takes boot0 (first 48 KB) from a full NOR backup, checks it is the stock
 image this patch was written against, inserts stub.bin at 0x2b800, redirects
-the one call at 0x28c48, and fixes the eGON checksum.
+the FEL check (0x28c48), the FEL jump (0x28c66) and, unless --no-selector, the
+Melis load (0x28d3c) to the boot selector, and fixes the eGON checksum.
+The image on the bench before the selector (FEL window only, older stub
+layout) is kept as stock/nor/boot0-felwin-v1.bin: that is the rollback.
 """
 import argparse, hashlib, struct, subprocess, sys, os
 
@@ -16,6 +20,8 @@ CALL_AT = 0x28c48            # jal ra,0x24d38 in boot0 main
 ORIG_CALL = 0x8f0fc0ef       # jal ra,0x24d38 from 0x28c48
 JUMP_AT = 0x28c66            # addi a0,zero,32 (then jalr a0 -> BROM FEL entry 0x20)
 ORIG_JUMP = 0x02000513
+HOOK_AT = 0x28d3c            # jal ra,0x284fa: load the Melis package
+ORIG_HOOK = 0xfbeff0ef
 
 
 def jal(frm, to, rd=1):
@@ -35,8 +41,11 @@ def egon_sum(img):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("backup")
-    p.add_argument("-o", "--out", default=os.path.join(HERE, "boot0-felwin.bin"))
+    p.add_argument("-o", "--out")
+    p.add_argument("--no-selector", action="store_true", help="FEL window only (no 0x28d3c hook)")
     a = p.parse_args()
+    if not a.out:
+        a.out = os.path.join(HERE, "boot0-felwin.bin" if a.no_selector else "boot0-fw.bin")
 
     subprocess.run(["make", "-s", "-C", HERE, "stub.bin"], check=True)
     stub = open(os.path.join(HERE, "stub.bin"), "rb").read()
@@ -53,19 +62,29 @@ def main():
     have = struct.unpack("<I", img[JUMP_AT - LOAD:JUMP_AT - LOAD + 4])[0]
     if have != ORIG_JUMP:
         sys.exit(f"unexpected instruction at {JUMP_AT:#x}: {have:#010x}")
+    have = struct.unpack("<I", img[HOOK_AT - LOAD:HOOK_AT - LOAD + 4])[0]
+    if have != ORIG_HOOK:
+        sys.exit(f"unexpected instruction at {HOOK_AT:#x}: {have:#010x}")
     print(f"stock boot0 sha256 {hashlib.sha256(img).hexdigest()[:16]}")
 
     s = STUB_AT - LOAD
     assert s + len(stub) <= 0xC000
     img[s:s + len(stub)] = stub
     img[CALL_AT - LOAD:CALL_AT - LOAD + 4] = struct.pack("<I", jal(CALL_AT, STUB_AT))
-    tramp = STUB_AT + int(subprocess.run(["riscv64-elf-nm", os.path.join(HERE, "stub.elf")], capture_output=True,
-                          text=True, check=True).stdout.split(" T fel_tramp")[0].split()[-1], 16) - STUB_AT
+    syms = {l.split()[2]: int(l.split()[0], 16) for l in subprocess.run(
+        ["riscv64-elf-nm", os.path.join(HERE, "stub.elf")], capture_output=True, text=True, check=True).stdout.splitlines()
+        if len(l.split()) == 3}
+    assert syms["stub"] == STUB_AT
+    tramp = syms["fel_tramp"]
     img[JUMP_AT - LOAD:JUMP_AT - LOAD + 4] = struct.pack("<I", jal(JUMP_AT, tramp, rd=0))
+    if not a.no_selector:
+        img[HOOK_AT - LOAD:HOOK_AT - LOAD + 4] = struct.pack("<I", jal(HOOK_AT, syms["sel"]))
     img[12:16] = struct.pack("<I", egon_sum(img))
     open(a.out, "wb").write(img)
-    print(f"wrote {a.out}: stub {len(stub)} bytes at {STUB_AT:#x}, call at {CALL_AT:#x} and FEL jump at {JUMP_AT:#x} redirected, "
-          f"checksum {struct.unpack('<I', img[12:16])[0]:#010x}")
+    print(f"wrote {a.out}: stub {len(stub)} bytes at {STUB_AT:#x}; FEL check {CALL_AT:#x} -> {STUB_AT:#x}, "
+          f"FEL jump {JUMP_AT:#x} -> {tramp:#x}"
+          + ("" if a.no_selector else f", Melis load {HOOK_AT:#x} -> sel {syms['sel']:#x}")
+          + f"; checksum {struct.unpack('<I', img[12:16])[0]:#010x}")
 
 
 if __name__ == "__main__":

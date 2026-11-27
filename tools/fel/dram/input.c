@@ -52,6 +52,8 @@ static void poll_sources(void)
 	}
 }
 
+uint32_t input_t0(void) { return t_start; }
+
 int input_next(event *e)
 {
 	if (qh == qt) poll_sources();

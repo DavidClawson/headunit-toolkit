@@ -101,6 +101,10 @@ the app sends is not yet identified (the app does send `B0` code `CE`).
 
 ## Front-panel keys (verified on the bench, 2026-11-26)
 
+One frame per press, sent on the press. Holding a key sends nothing more: a
+3 s hold of the phone key gives exactly the frame a short press gives, with no
+repeats and no release frame. So the F133 can't see long-presses.
+
 The front-panel buttons are read by the **MCU**, not the F133: in FEL, the
 key ADC and every GPIO (with disabled pins opened as pulled-up inputs) stayed
 still while buttons were pressed. The MCU sends one frame per press on UART1:
