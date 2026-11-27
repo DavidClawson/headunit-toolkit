@@ -566,3 +566,15 @@ a couple of minutes later (heartbeat unanswered); the unit came back up in ours.
   the BD3702), UART1 TX (every frame stock sends the MCU); (3) the debug UART log
   (`bPrintLog=1`, PB6 at 576000) would answer it directly, but needs the case
   open and a safer connection than hand-soldering.
+
+**A tuner does answer in stock (2026-11-27).** On the bench unit, stock radio
+scan fills empty presets, and seek and step tuning work. Those need tuner
+readback (station valid, RSSI), and the app's only radio path is I2C to an
+Si473x at `0x11` on `/dev/twi1`. So the tuner exists and answers in stock; FEL
+hasn't reached it yet. The F133 datasheet lists three TWI1 pin options:
+- PB4/PB5, function 4: scanned, empty;
+- PE0/PE1, function 4: not scanned yet;
+- PG8/PG9, function 3: not scanned yet. PG8 is also the GT911 reset line.
+
+`sys_config`'s PG14 can't be TWI1 at all. Next FEL test: full MCU start-up plus
+radio mode, then scan TWI1 on all three pin pairs.
