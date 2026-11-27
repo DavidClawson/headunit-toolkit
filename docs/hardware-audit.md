@@ -31,7 +31,7 @@ Legend:
 |---|---|---|---|
 | Sound processor | `audioChip=0` (BD3702), `/dev/twi2` | ✅ answers at TWI2 `0x40` (write-only) | bus scan |
 | Tuner | `bArmRadio=1`, `radioModule=0` (Si4730), `/dev/twi1`, reset `PB5` | ❌ **nothing answers on TWI1**, on either pin set; `ANT` module footprint empty | bus scans; photo |
-| TWI1 pins | `sys_config`: PG14 / PB4 | ❌ PG14 can't be I2C; real pins PB4 / PB5 (and PB5 is the "radio reset") | Linux pin-mux table |
+| TWI1 pins | `sys_config`: PG14 / PB4 | ❌ PG14 can't be TWI1 (on the F133 it's TWI2-SCK in function 3); TWI1 can come out on **PB4/PB5 (fn 4, scanned: empty), PE0/PE1 (fn 4) or PG8/PG9 (fn 3)**, and the last two are **not scanned yet** | F133 datasheet pin table; Linux pin-mux table |
 | FM radio | works in stock | ✅ 101.1 MHz from the rear RCA | iMic recording; **source unknown** ([issue #2](https://github.com/DavidClawson/headunit-toolkit/issues/2)) |
 | RDS | `bHaveRds=0` | ❓ | test: set `bHaveRds=1` in Config.ini |
 | AM | `bAmEnable=1` | ❓ | |
