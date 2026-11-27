@@ -16,6 +16,7 @@ static inline uint64_t cycles(void) { uint64_t c; __asm__ volatile("csrr %0, mcy
 void lib_init(void);
 uint32_t ticks(void);
 #define TICKS_PER_US 24u
+uint32_t millis(void);           /* ms counter that does not wrap at 178 s */
 static inline uint32_t elapsed_ms(uint32_t t0) { return (ticks() - t0) / (TICKS_PER_US * 1000u); }
 
 /* CPU clock from PLL_CPU (0x02001000): 408 MHz in plain FEL, 1008 MHz after

@@ -29,6 +29,16 @@ void lib_init(void)
 
 uint32_t ticks(void) { return ~rd32(TMR1_CUR); }  /* down-counter -> up */
 
+/* milliseconds since start, wrap-free for 49 days; needs a call at least every ~178 s */
+uint32_t millis(void)
+{
+	static uint32_t last, frac, ms;
+	uint32_t t = ticks();
+	frac += t - last; last = t;
+	ms += frac / (TICKS_PER_US * 1000u); frac %= TICKS_PER_US * 1000u;
+	return ms;
+}
+
 void udelay(uint32_t us)
 {
 	uint32_t t0 = ticks();

@@ -8,8 +8,8 @@ PROGS = memtest clock dsi1 dsi2 dsion dsi3 dsi4 ui touch touchrate vsync app han
 all: $(PROGS:=.bin)
 
 .PRECIOUS: %.elf
-COMMON = start.S lib.c dsi.c display.c gfx.c font8x16.c font16x32.c home.c twi.c gt911.c uart.c mcu.c input.c fw.c bbi2c.c
-%.elf: %.c $(COMMON) lib.h dsi.h display.h gfx.h home.h twi.h gt911.h uart.h mcu.h input.h fw.h ../bootsel/fwboot.h panel_init.h dram.ld
+COMMON = start.S lib.c dsi.c display.c gfx.c font8x16.c font16x32.c home.c twi.c gt911.c uart.c mcu.c input.c fw.c bbi2c.c tuner.c radio_ui.c
+%.elf: %.c $(COMMON) lib.h dsi.h display.h gfx.h home.h twi.h gt911.h uart.h mcu.h input.h fw.h tuner.h radio_ui.h bbi2c.h ../bootsel/fwboot.h panel_init.h dram.ld
 	$(CROSS)gcc $(CFLAGS) -ffunction-sections -fdata-sections $(LDFLAGS) -Wl,--gc-sections -o $@ $(COMMON) $<
 
 %.bin: %.elf

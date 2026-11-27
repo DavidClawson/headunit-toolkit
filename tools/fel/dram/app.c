@@ -6,6 +6,7 @@
  *   knob CW/CCW: move the focus ring    knob push: open the focused tile
  *   tap a tile: open it                 "< Back" (or knob push) on a page: return
  *   phone key: banner for 2 s
+ *   Radio page: see radio_ui.c (knob tunes there)
  *   hold the status bar 3 s: reboot into stock firmware once (fw.c)
  *   phone key on the Settings page: deliberate freeze, to test that the
  *   watchdog (petted every loop pass when booted from NOR) restarts us
@@ -20,8 +21,11 @@
 #include "input.h"
 #include "mcu.h"
 #include "fw.h"
+#include "radio_ui.h"
 
+#ifndef SECONDS
 #define SECONDS 60
+#endif
 
 static struct {
 	int page;            /* -1 = home, else the open tile */
@@ -31,7 +35,8 @@ static struct {
 	uint32_t hold_t0;    /* finger down on the status bar since (ms), 0 = no */
 	int hold_left;       /* seconds left on the countdown shown */
 	char status[96];
-} st = { -1, 0, -1, 0, 0, 0, "" };
+	uint32_t press_ms;   /* when the current press started */
+} st = { -1, 0, -1, 0, 0, 0, "", 0 };
 
 #define BAR_H 64
 #define HOLD_MS 3000
@@ -42,7 +47,7 @@ static const uint32_t page_col[HOME_TILES] = { 0xd9480f, 0x1971c2, 0x2f9e44, 0x6
 #define BACK_W 200
 #define BACK_H 72
 
-static uint32_t now_ms(void) { return ticks() / (1000 * TICKS_PER_US); }
+static uint32_t now_ms(void) { return millis(); }
 
 static void status_bar(void)
 {
@@ -72,15 +77,19 @@ static void draw(void)
 		status_bar();
 		gfx_rrect(BACK_X, BACK_Y, BACK_W, BACK_H, 20, st.pressed == 0 ? gfx_mix(c, 0xffffff, 90) : c);
 		gfx_text(BACK_X + 36, BACK_Y + 20, "< Back", &font16x32, 1, 0xffffff);
-		const char *n = home_tile_name(st.page);
-		gfx_text((GW - gfx_text_w(n, &font16x32, 3)) / 2, 260, n, &font16x32, 3, 0xffffff);
-		const char *m = st.page == 3 ? "phone key here = freeze test (watchdog restarts us)"
-		                             : "nothing here yet: knob push or Back to return";
-		gfx_text((GW - gfx_text_w(m, &font8x16, 1)) / 2, 400, m, &font8x16, 1, 0xc8d4ec);
+		if (st.page == 0) radio_draw(st.pressed);
+		else {
+			const char *n = home_tile_name(st.page);
+			gfx_text((GW - gfx_text_w(n, &font16x32, 3)) / 2, 260, n, &font16x32, 3, 0xffffff);
+			const char *m = st.page == 3 ? "phone key here = freeze test (watchdog restarts us)"
+			                             : "nothing here yet: knob push or Back to return";
+			gfx_text((GW - gfx_text_w(m, &font8x16, 1)) / 2, 400, m, &font8x16, 1, 0xc8d4ec);
+		}
 	}
-	if (now_ms() < st.banner_until) {
-		gfx_rrect(340, 560, 600, 90, 30, 0x2b8a3e);
-		const char *b = "Phone key";
+	const char *note = st.page == 0 ? radio_note() : 0;
+	if (now_ms() < st.banner_until || note) {
+		gfx_rrect(340, 160, 600, 90, 30, 0x2b8a3e);
+		const char *b = note ? note : "Phone key";
 		gfx_text((GW - gfx_text_w(b, &font16x32, 1)) / 2, 589, b, &font16x32, 1, 0xffffff);
 	}
 	gfx_fill(0, GH - 40, GW, 40, 0x0b1222);
@@ -125,9 +134,11 @@ static int handle(const event *e)
 	int home = st.page < 0;
 	switch (e->type) {
 	case EV_KEY:
+		if (st.page == 0 && (e->key == MCU_KEY_CW || e->key == MCU_KEY_CCW))
+			return radio_knob(e->key == MCU_KEY_CW ? 1 : -1);
 		if (e->key == MCU_KEY_CW && home) st.focus = (st.focus + 1) % HOME_TILES;
 		else if (e->key == MCU_KEY_CCW && home) st.focus = (st.focus + HOME_TILES - 1) % HOME_TILES;
-		else if (e->key == MCU_KEY_KNOB) st.page = home ? st.focus : -1;
+		else if (e->key == MCU_KEY_KNOB) { st.page = home ? st.focus : -1; if (st.page == 0) radio_open(); }
 		else if (e->key == MCU_KEY_PHONE && st.page == 3) freeze_test();
 		else if (e->key == MCU_KEY_PHONE) st.banner_until = now_ms() + 2000;
 		return 1;
@@ -143,7 +154,9 @@ static int handle(const event *e)
 			st.hold_t0 = 0;                          /* slid off the bar: cancel */
 			return 1;
 		}
-		int p = home ? home_hit(e->x, e->y) : (in_back(e->x, e->y) ? 0 : -1);
+		int p = home ? home_hit(e->x, e->y) : in_back(e->x, e->y) ? 0 :
+		        st.page == 0 ? radio_hit(e->x, e->y) : -1;
+		if (e->type == EV_TOUCH_DOWN) st.press_ms = e->ms;
 		if (p == st.pressed) return e->type == EV_TOUCH_DOWN;
 		st.pressed = p;
 		return 1;
@@ -151,8 +164,9 @@ static int handle(const event *e)
 	case EV_TOUCH_UP:
 		if (st.hold_t0) { st.hold_t0 = 0; return 1; }
 		if (st.pressed >= 0) {
-			if (home) { st.focus = st.pressed; st.page = st.pressed; }
-			else st.page = -1;
+			if (home) { st.focus = st.pressed; st.page = st.pressed; if (st.page == 0) radio_open(); }
+			else if (st.pressed == 0) st.page = -1;
+			else if (st.page == 0) radio_press(st.pressed, e->ms - st.press_ms);
 		}
 		st.pressed = -1;
 		return 1;
@@ -173,8 +187,8 @@ int main(void)
 	uint32_t back = display_fb() == FB0 ? FB1 : FB0;
 	int dirty = 1, banner = 0;
 	unsigned events = 0, redraws = 0, worst = 0, logged = 0;
-	uint32_t t0 = ticks();
-	while (nor || ticks() - t0 < SECONDS * 1000000u * TICKS_PER_US) {
+	uint32_t t0 = millis();
+	while (nor || millis() - t0 < SECONDS * 1000u) {
 		fw_pet();
 		event e;
 		while (input_next(&e)) {
@@ -187,7 +201,7 @@ int main(void)
 			dirty |= handle(&e);
 		}
 		if (st.hold_t0) {
-			uint32_t held = (ticks() - input_t0()) / (1000 * TICKS_PER_US) - st.hold_t0;
+			uint32_t held = millis() - input_t0() - st.hold_t0;
 			if (held >= HOLD_MS) {
 				st.hold_t0 = 0;
 				gfx_target(back);
@@ -202,7 +216,8 @@ int main(void)
 			int left = (int)((HOLD_MS - held + 999) / 1000);
 			if (left != st.hold_left) { st.hold_left = left; dirty = 1; }
 		}
-		int b = now_ms() < st.banner_until;
+		dirty |= radio_tick() && st.page == 0;
+		int b = now_ms() < st.banner_until || (st.page == 0 && radio_note());
 		if (b != banner) { banner = b; dirty = 1; }
 		if (!dirty) { udelay(1000); continue; }
 		uint32_t a = ticks();
