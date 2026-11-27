@@ -19,6 +19,8 @@ the first-contact kit; the background is in
 | `bootsel/` | **FEL window in boot0** (see below): `stub.S`, `mkboot0.py <nor-backup>` builds `boot0-felwin.bin`. |
 | `fel-catch.sh` | Waits for the boot0 FEL window, disarms the watchdog, keeps the unit in FEL. Start it, then power-cycle. |
 | `fel-boot-stock.sh` | From FEL, reset straight into the stock firmware (no power cycle). |
+| `buttons.py` | `watch [--all-inputs] [--no-touch]`: prints LRADC, GPIO and GT911 changes while you press things. `--all-inputs` opens disabled pins as pulled-up inputs (restored after). |
+| `keymap-session.sh` | Spoken prompts (macOS `say`) + one UART1 capture per button: how the key codes in `docs/mcu-protocol.md` were mapped. |
 | `clip-wait.sh` | Polls the SOIC clip until flashrom sees the chip, then chimes. For reseating a fiddly clip. |
 | `payload.ld` | Linker script for C payloads (entry at `0x40000`, request block at `0x40F00`). |
 | `Makefile` | `make` builds `probe.bin` (load address `0x40000`). |

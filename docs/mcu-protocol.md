@@ -77,10 +77,37 @@ When an update is in progress the receive path switches to `0xe91bba46`
 then frames are `AA 55 TYPE(1-3) + 12 bytes`, with firmware sent in 512-byte
 blocks. The pre-dispatch hook `0xe91bb9bc` routes `81/C5`, `80/C4`, `80/C6` to it.
 
+## Front-panel keys (verified on the bench, 2026-11-26)
+
+The front-panel buttons are read by the **MCU**, not the F133: in FEL, the
+key ADC and every GPIO (with disabled pins opened as pulled-up inputs) stayed
+still while buttons were pressed. The MCU sends one frame per press on UART1:
+
+```
+02 81 B2 06 | 00 KK 00 00 00 00 | XOR
+```
+
+The app's `B2` handler (`0xe918b43c`) maps `KK` through a jump table at
+`0xe9273c34` to an internal key ID:
+
+| Control | `KK` (seen) | App key ID |
+|---|---|---|
+| Knob push | `01` | 70 (presumably mute) |
+| Knob clockwise | `04` | 65 (presumably volume up) |
+| Knob counter-clockwise | `05` | 66 (presumably volume down) |
+| Phone | `06` | special handler (call state check, `0xe91803ae`) |
+| Home | — | **nothing seen on UART1, UART4, LRADC or GPIO while in FEL** |
+
+Other `KK` in the table (not on this panel, likely steering-wheel/IR paths):
+`02→64`, `03→67`, `07→365`, `08→71`, `09→17`, `0A→73`, `0C→101`, `1D→233`;
+`0x10`–`0x15` → `KK+112`. Codes `0x87`–`0x98` take a separate path. Holding a
+key sends nothing extra. Home may only be forwarded after the F133's start-up
+handshake with the MCU (FEL never sends one); unconfirmed.
+
 ## On the bench (FEL)
 
-`tools/fel/uart_sniff.py` heard nothing on UART1 or UART4 for 5 s each; all
-four lines are held high externally. Consistent with the MCU only answering
-the F133. A safe first transmit test would be a command the app sends at init
+With no buttons pressed, `tools/fel/uart_sniff.py` hears nothing on UART1 or
+UART4; the MCU only sends key events (above) unprompted. The capture shows
+115200 baud, matching the app. A safe first transmit test would be a command the app sends at init
 (for example `0xA0`, LEN 0: `02 80 A0 00 20`), but which MCU commands have side
 effects is not mapped yet.

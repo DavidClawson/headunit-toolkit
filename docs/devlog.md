@@ -6,6 +6,20 @@ it's reverse-engineering facts and test results from a unit we own.
 
 ---
 
+## 2026-11-26 (night) — front-panel keys come from the MCU
+
+- No F133 GPIO or key-ADC activity for any button (after opening the reset
+  "I/O disabled" pins as inputs; in that state DAT always reads 0, which hid
+  pins from the first watch).
+- The MCU sends `02 81 B2 06 00 KK 00 00 00 00 XOR` per press on UART1 at
+  115200: knob push `01`, knob CW `04`, CCW `05`, phone `06`. Decoded the app's
+  `KK` → key-ID table. Home produced nothing anywhere in FEL.
+- Touch didn't register in this session (GT911 answers on I2C); not chased.
+- My mistake along the way: running two xfel tools at once makes both report
+  "No FEL device found", which looked like the unit had reset. It hadn't.
+
+---
+
 ## 2026-11-26 (late) — FEL without the clip: a watchdog-guarded window in boot0
 
 - **Stock boot0 already has a "jump to FEL" path** (RTC GP2 = `0x5AA5A55A`,
