@@ -8,7 +8,7 @@ bt_state bt;
 static char line[256];
 static unsigned n;
 
-void bt_init(void) { uart_init(U, 115200); n = 0; }
+void bt_init(void) { uart_init(U, 115200); n = 0; bt_cmd("MY"); }   /* MY: version query */
 
 void bt_cmd(const char *c)
 {
@@ -83,6 +83,8 @@ static int handle(void)
 	if (a == 'M' && b == 'A' && dl == 0) { bt.playing = 0; bt.connected = 1; return 1; }
 	if (a == 'M' && b == 'B' && dl == 0) { bt.playing = 1; bt.connected = 1; bt.pos_ms = millis(); return 1; }
 	if (a == 'I' && b == 'B') { bt.connected = 1; return 1; }
+	if (a == 'M' && b == 'W') { copy_field(bt.version, sizeof bt.version, d, dl); return 1; }
+	if (a == 'P' && b == 'T') logf("bt: PT line, %u bytes: %s\n", dl, line);   /* phone time? learning the format */
 	if (a == 'I' && (b == 'D' || b == 'C' || b == 'R')) {   /* ringing / dialling / caller number */
 		if (dl) copy_field(bt.number, sizeof bt.number, d, dl);
 		if (b == 'D') bt.call = BT_CALL_RINGING;

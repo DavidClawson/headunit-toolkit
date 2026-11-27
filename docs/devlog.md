@@ -700,3 +700,22 @@ program into the boot firmware (`tools/fel/dram/tuner.c`, `radio_ui.c`):
   power cycles the unit came back with volume, station and favorites, and on
   the right page both ways.
 - **Also:** a volume number above the bar.
+
+**Settings page (2026-11-27).** Tile 4 (`settings_ui.c`):
+- **Button colour:** 7 solid colours, applied at once and saved. "Cycle" and
+  "off" were dropped: the MCU accepts and echoes them (`ledtest.c`), but on the
+  bench the buttons didn't follow reliably.
+- **Screen brightness:** 10 steps with `−`/`+` or the knob, saved. It's hardware
+  PWM7 on PD22 (24 MHz / 1200 = 20 kHz). The first try left the screen dark
+  because the PWM bus gate was at the wrong address; it's `0x020017AC`, as the
+  earlier PWM test had already found (`bltest.c` confirmed the registers).
+- **System:** reboot to stock (tap twice), the watchdog freeze test (moved here
+  from the phone key), and a version line (tuner, Bluetooth module, build date).
+- **The MCU start-up list is now sent at boot** (`mcu_start`: `A4 A0 B7 C3 BA A7`
+  and "host up" `B0 CE 01`). Without it the key-LED command was ignored and the
+  buttons stayed dark. After `A0` the MCU pings every 3 s (`81 B2 [00 CE]`);
+  `mcu_service` answers `B0 [CE 00 00 00 00]`, and pings and LED echoes are kept
+  out of key handling.
+- **Tested:** colour and brightness came back after power cycles. 51 KB of 60.
+- **Next:** auto brightness from the illumination (headlight) wire, once its MCU
+  frame is found; the stock config has day/night levels (90/40).

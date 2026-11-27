@@ -208,3 +208,10 @@ it's needed.
 the setting as `81 B2 [00 FE 00 00 t m]`. Stock defaults to cycle, every 5 s,
 which is why the buttons colour-cycle when nothing sets them.
 - White: `02 80 B0 05 FE 00 00 05 05 CB`.
+- **The command only works after the start-up list** (`A4 A0 B7 C3 BA A7`, then
+  `B0 [CE 01 00 00 00]`). Before it, the buttons stayed dark.
+- After `A0`, answer each keep-alive ping `81 B2 [00 CE …]` with
+  `B0 [CE 00 00 00 00]` (`mcu_service` in `tools/fel/dram/mcu.c`).
+- Cycle (`m` 0) and off (`m` FF) are echoed but didn't take effect reliably on the
+  bench; a cycle time of 0 is echoed as 5. The middle `00 00` bytes are unknown
+  (maybe brightness).

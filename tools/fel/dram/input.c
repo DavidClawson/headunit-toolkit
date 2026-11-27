@@ -34,6 +34,7 @@ static void poll_sources(void)
 {
 	mcu_frame f;
 	while (mcu_poll(&f)) {
+		if (mcu_service(&f)) continue;
 		int k = mcu_key(&f);
 		if (k >= 0) push(EV_KEY, (uint8_t)k, 0, 0);
 	}

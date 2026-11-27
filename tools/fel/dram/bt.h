@@ -17,6 +17,7 @@ typedef struct {
 	char number[32];        /* caller / callee */
 	char caller[48];        /* contact name, when the phone sends one (IQ line) */
 	uint32_t call_ms;       /* millis() when the call was answered */
+	char version[40];       /* module firmware (MW line, asked for at init) */
 } bt_state;
 
 enum { BT_CALL_NONE, BT_CALL_RINGING, BT_CALL_OUTGOING, BT_CALL_ACTIVE };

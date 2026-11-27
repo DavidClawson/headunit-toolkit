@@ -78,6 +78,26 @@ static void backlight_on(void)
 	wr32(0x020000A0, rd32(0x020000A0) | (1u << 22));
 }
 
+/* Brightness: PD22 as PWM7 (function 5), 24 MHz / 1200 = 20 kHz, duty = level / 10
+   with a floor so the screen never goes fully dark. Register layout as in the
+   D1/F133 PWM block (Linux pwm-sun20i): clock config 0x2C (pair 6/7), gate 0x40,
+   enable 0x80, channel 7 control 0x1E0 and period 0x1E4. */
+#define PWM 0x02000C00u
+#define PWM_PERIOD 1200u
+void display_brightness(int level)
+{
+	if (level < 1) level = 1;
+	if (level > 10) level = 10;
+	unsigned duty = PWM_PERIOD * (unsigned)(level * 10 - 3) / 100u;     /* 7 % .. 97 % */
+	wr32(0x020017AC, rd32(0x020017AC) | 1u | (1u << 16));               /* PWM bus gate, out of reset */
+	wr32(PWM + 0x2C, 0);                                                /* pair 6/7: 24 MHz crystal, /1 */
+	wr32(PWM + 0x40, (rd32(PWM + 0x40) | (1u << 7)) & ~(1u << 23));     /* ch7 clock on, no bypass */
+	wr32(PWM + 0x1E0, 1u << 8);                                         /* active high, prescale /1 */
+	wr32(PWM + 0x1E4, ((PWM_PERIOD - 1) << 16) | duty);
+	wr32(PWM + 0x80, rd32(PWM + 0x80) | (1u << 7));                     /* ch7 on */
+	wr32(0x02000098, (rd32(0x02000098) & ~(0xFu << 24)) | (5u << 24));  /* PD22 -> PWM7 */
+}
+
 int display_up(uint32_t fb)
 {
 	if (display_running()) { display_flip(fb); return 0; }
