@@ -29,6 +29,7 @@ struct musb_class {
 	   0 for no data stage, -1 to stall. For OUT data, `out` holds what the host sent. */
 	int (*setup)(const uint8_t req[8], uint8_t *buf, const uint8_t *out, int outlen);
 	void (*configured)(int config);                  /* SET_CONFIGURATION, 0 = deconfigured / reset */
+	void (*set_alt)(int iface, int alt);             /* SET_INTERFACE (may be 0) */
 };
 
 int  musb_start(const struct musb_class *c);    /* disconnect, set up, connect; 0 ok */
@@ -37,6 +38,8 @@ int  musb_configured(void);
 int  musb_high_speed(void);
 int  musb_write(int ep, const void *buf, int n); /* one packet (<= maxp, 0 = ZLP) if the FIFO is free: n, else -1 */
 int  musb_read(int ep, void *buf, int max);      /* one received packet: its length, 0 if none */
+int  musb_rx_ready(int ep);                      /* a packet (possibly zero-length) is waiting */
+int  musb_send(int ep, const void *buf, int n, int maxp);   /* a whole transfer: packets, plus a ZLP if n % maxp == 0; 0 ok, -1 timeout */
 void musb_stop(void);                           /* soft-disconnect */
 uint32_t musb_stats(uint32_t *resets, uint32_t *setups);
 int  musb_recent(uint8_t req[][8], int max);   /* the last few SETUP packets, newest first (debugging) */

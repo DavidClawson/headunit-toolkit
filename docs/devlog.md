@@ -818,3 +818,31 @@ every second and echoes what the Mac sends. Run it with
   and mtval.
 - **Next:** CDC-NCM, so the Mac gets a network interface to the unit. That's
   the transport CarPlay runs over, testable without an iPhone.
+
+**USB networking (CDC-NCM) to the Mac (2026-11-27).** `ncmtest.c` turns the
+unit into a USB network adapter. It reuses `musb.c`, which now tracks
+`SET_INTERFACE` and sends whole multi-packet transfers. NCM is the transport
+wired CarPlay runs over, so the Mac stands in for the iPhone here. macOS
+needs no driver: a new interface (`en14`) appears 1.6 s after the takeover.
+A tiny responder on the unit (no IP stack yet) handles:
+- **DHCP:** gives the Mac `192.168.133.2`, with no router or DNS, so the Mac's
+  own routes are untouched;
+- **ARP and ping** for `192.168.133.1`.
+
+Results: the Mac had its address 4.7 s after the takeover; **10/10 pings at
+~0.9 ms**; 1,000-, 1,400- and **1,472-byte** pings (full 1,500-byte packets,
+three USB packets each way) all answered. The unit's counters: 1 bus reset,
+16 setups, high speed, 77 frames in (IPv4 and IPv6), 14 out, **0 bad NTBs**.
+
+- **Notes:**
+  - NTB-16 only; one datagram per IN NTB; OUT NTBs are capped at 2 KB.
+  - The interface comes up after `SET_INTERFACE` alt 1 plus a
+    `CONNECTION_SPEED_CHANGE` and `NETWORK_CONNECTION` notification on EP1.
+  - macOS ignores the iMACAddress string (`ether 02:00:00:00:00:00`).
+- **Run:** `felrun.py dram/ncmtest.bin --usb-net 60` finds the interface,
+  waits for DHCP and pings.
+- **Toward CarPlay:**
+  - CarPlay additionally needs iAP2 on a second interface and the USB role
+    switch.
+  - `carplay.mod` brings its own lwIP, so the host only passes NCM frames
+    through `ncm_send_cb` (see `docs/carplay-host.md`).

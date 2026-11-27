@@ -66,7 +66,7 @@ static int acm_setup(const uint8_t r[8], uint8_t *buf, const uint8_t *out, int o
 static void acm_configured(int c) { logf("usb: configuration %d (%s speed)\n", c, musb_high_speed() ? "high" : "full"); }
 
 static const struct musb_class acm = {
-	dev, cfg_hs, cfg_fs, strings, 3, eps, 3, acm_setup, acm_configured,
+	dev, cfg_hs, cfg_fs, strings, 3, eps, 3, acm_setup, acm_configured, 0,
 };
 
 static const char hexd[] = "0123456789ABCDEF";

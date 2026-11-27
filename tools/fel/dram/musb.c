@@ -59,6 +59,7 @@ static inline void wr16(uintptr_t a, uint16_t v) { *(volatile uint16_t *)a = v; 
 
 static const struct musb_class *cls;
 static int config, hs;
+static uint8_t alt[8];
 static uint32_t n_resets, n_setups;
 static uint8_t ep0buf[512];
 
@@ -97,6 +98,7 @@ static void bus_reset(void)
 	wr8(FADDR, 0);
 	if (config && cls->configured) cls->configured(0);
 	config = 0;
+	memset(alt, 0, sizeof alt);
 	setup_eps();
 }
 
@@ -185,14 +187,21 @@ static void ep0_setup(const uint8_t *r)
 			return;
 		case 9:                                              /* SET_CONFIGURATION */
 			config = wvalue & 0xFF;
+			memset(alt, 0, sizeof alt);
 			setup_eps();
 			if (cls->configured) cls->configured(config);
 			wr16(CSR0, CSR0_SVDRXPKTRDY | CSR0_DATAEND);
 			return;
 		case 8: ep0buf[0] = (uint8_t)config; ep0_in(ep0buf, 1, wlen); return;
 		case 0: ep0buf[0] = 0; ep0buf[1] = 0; ep0_in(ep0buf, 2, wlen); return;
-		case 10: ep0buf[0] = 0; ep0_in(ep0buf, 1, wlen); return;
-		case 11: case 1: case 3:                             /* SET_INTERFACE, CLEAR/SET_FEATURE */
+		case 10: ep0buf[0] = alt[r[4] & 7]; ep0_in(ep0buf, 1, wlen); return;   /* GET_INTERFACE */
+		case 11:                                             /* SET_INTERFACE */
+			alt[r[4] & 7] = (uint8_t)wvalue;
+			setup_eps();                                     /* fresh FIFOs and data toggles */
+			wr16(CSR0, CSR0_SVDRXPKTRDY | CSR0_DATAEND);
+			if (cls->set_alt) cls->set_alt(r[4], wvalue);
+			return;
+		case 1: case 3:                                      /* CLEAR/SET_FEATURE */
 			wr16(CSR0, CSR0_SVDRXPKTRDY | CSR0_DATAEND);
 			return;
 		}
@@ -290,6 +299,30 @@ int musb_read(int ep, void *buf, int max)
 	wr16(RXCSR, 0);                                          /* clear RXPKTRDY: the FIFO is free again */
 	wr8(INDEX, 0);
 	return n;
+}
+
+int musb_rx_ready(int ep)
+{
+	wr8(INDEX, ep);
+	int r = rd16(RXCSR) & RXCSR_RXPKTRDY;
+	wr8(INDEX, 0);
+	return r != 0;
+}
+
+int musb_send(int ep, const void *buf, int n, int maxp)
+{
+	const uint8_t *p = buf;
+	int sent = 0;
+	for (;;) {
+		int k = n - sent > maxp ? maxp : n - sent;
+		uint32_t t0 = millis();
+		while (musb_write(ep, p + sent, k) < 0) {
+			musb_poll();
+			if (millis() - t0 > 200 || !config) return -1;
+		}
+		sent += k;
+		if (k < maxp) return 0;                      /* a short packet (or ZLP) ends the transfer */
+	}
 }
 
 uint32_t musb_stats(uint32_t *resets, uint32_t *setups)
