@@ -38,7 +38,17 @@ it's reverse-engineering facts and test results from a unit we own.
   `0x1060`, config 1024 × 600. Live touches read back correctly; the raw frame is
   landscape (x left→right, y top→bottom), so the 720 × 1280 panel is mounted
   sideways. TWI2 (PE12/PE13) has three more devices: `0x10`, `0x40`, `0x44`.
-- **Next:** identify the TWI2 chips, then panel init over MIPI-DSI,
+- **TWI2 identified:** `0x10` = Apple MFi auth coprocessor (`Config.ini`
+  `carplayI2cName=/dev/twi2`, registers read zero), `0x40` = sound processor,
+  write-only, likely ROHM BD3702 (app driver `CAudioBD3702`), `0x44` = Techpoint
+  TP2850 reverse-camera decoder (chip ID `0x2850`, kernel driver `tp2804`).
+  First guesses from addresses alone (QN8035 tuner, PT2312) were wrong, and an
+  early read hit the wrong bus (tool defaulted to bus 3; `--bus` now required).
+- **Tuner is on TWI1** (`radioI2cName=/dev/twi1`, PG14/PB04) and doesn't answer
+  in FEL. `radioResetGpio=105` would be PD9 under the usual numbering, but PD9 is
+  a MIPI-DSI lane pin, so it wasn't driven until the numbering is confirmed.
+  Also `bHaveRds=0` in this unit's `Config.ini`.
+- **Next:** tuner reset pin, then panel init over MIPI-DSI,
   then a boot selector with watchdog fallback. Plan in
   [boot-and-recovery.md](boot-and-recovery.md#plan-clean-sheet-firmware-with-fallback).
 

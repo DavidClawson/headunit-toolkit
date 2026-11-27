@@ -302,8 +302,10 @@ What this gives:
 2. **Map the hardware from RAM**: backlight **done** (PG15 enable + PD22/PWM7,
    lit and blinked from FEL, `tools/fel/backlight.sh`) and hardware PWM dimming
    **done** (PWM7 at 50 kHz, `tools/fel/pwm-backlight.sh`); GT911 touch on TWI3 `0x5d`
-   **done** (ID and live coordinates, `tools/fel/i2c.py`); TWI2 has devices at
-   `0x10`, `0x40`, `0x44`. Next: identify those, then the LCD (`he0801a068`, MIPI-DSI).
+   **done** (ID and live coordinates, `tools/fel/i2c.py`); TWI2 identified: `0x10`
+   Apple MFi auth, `0x40` sound processor (likely BD3702), `0x44` Techpoint TP2850
+   camera decoder. Tuner is on TWI1 but silent in FEL (reset/power). Next: tuner
+   reset pin, front-panel buttons, DRAM, then the LCD (`he0801a068`, MIPI-DSI).
    Build on the existing open D1s work (xboot, RT-Thread, mainline U-Boot/Linux)
    rather than from nothing.
 3. **Boot selector with watchdog fallback**: keep the stock boot0. The selector

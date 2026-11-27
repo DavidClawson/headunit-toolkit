@@ -130,10 +130,16 @@ Duty changes written to PPR7 take effect while the channel runs.
 `i2c.py` loads `i2c.bin` into SRAM, muxes the bus pins, and runs one transfer
 per `xfel exec` (request block at `0x40F00`). A bus scan takes about 0.5 s.
 
-| Bus | Pins | Devices that ACK |
-|---|---|---|
-| TWI3 | PG10 SCL / PG11 SDA (func 3) | `0x5d`: Goodix GT911 touch |
-| TWI2 | PE12 SCL / PE13 SDA (func 2) | `0x10`, `0x40`, `0x44` (not identified yet) |
+| Bus | Pins | Device | How it was identified |
+|---|---|---|---|
+| TWI1 | PG14 SCL / PB04 SDA (func 4) | radio tuner (none answer in FEL) | `Config.ini` `radioI2cName=/dev/twi1`. Probably held in reset (`radioResetGpio=105`) or unpowered. |
+| TWI2 | PE12 SCL / PE13 SDA (func 2) | `0x10`: **Apple MFi auth coprocessor** | `carplayI2cName=/dev/twi2`; `0x10` is the MFi chip's standard address; registers read all zero (not a tuner). |
+| TWI2 | | `0x40`: **sound processor, likely ROHM BD3702** | `audioI2cName=/dev/twi2`; app has a `CAudioBD3702` driver; write-only (refuses reads), as BD37xx parts are. |
+| TWI2 | | `0x44`: **Techpoint TP2850** camera decoder | Chip ID `0x28 0x50` at `0xFE/0xFF`; the kernel's `tp2804` driver (AHD/CVBS → BT656). |
+| TWI3 | PG10 SCL / PG11 SDA (func 3) | `0x5d`: **Goodix GT911** touch | Product ID `911`. |
+
+The app also carries drivers for parts this board doesn't use (QN8035, Si47xx,
+TEF6686, TDA77xx tuners; PT2312 sound processor): one firmware for several board builds.
 
 GT911: product `911`, firmware `0x1060`, stored config 1024 × 600, 10 points.
 Live touches read cleanly. Raw frame is **landscape**: x 0→1024 left to right,
