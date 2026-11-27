@@ -101,6 +101,11 @@ void bt_ui_draw(int pressed)
 	button(B_VOLDN, "Vol -", pressed == B_VOLDN, BTN);
 	button(B_VOLUP, "Vol +", pressed == B_VOLUP, BTN);
 	button(B_MUTE, snd_muted ? "Unmute" : "Mute", pressed == B_MUTE, snd_muted ? 0xc92a2a : BTN);
+	{
+		char vs[24], *vp = str_cat(vs, "Volume ");
+		vp = str_u(vp, (unsigned)snd_vol); if (snd_muted) str_cat(vp, " (muted)");
+		gfx_text(552 - gfx_text_w(vs, &font8x16, 1) / 2, 574, vs, &font8x16, 1, 0xc8d4ec);
+	}
 	for (int i = 0; i < SOUND_MAX; i++)
 		gfx_rrect(252 + i * 20, 595, 14, 40, 4, i < snd_vol ? (snd_muted ? 0x5c6b8a : 0xc8d4ec) : 0x2a3f6a);
 	gfx_text(GW - 32 - gfx_text_w("knob: volume   push: play/pause", &font8x16, 1), 538,

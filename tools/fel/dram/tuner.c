@@ -3,6 +3,7 @@
 #include "twi.h"
 #include "bbi2c.h"
 #include "tuner.h"
+#include "settings.h"
 
 #define SI 0x11
 #define BD 0x40
@@ -167,6 +168,7 @@ void sound_step(int dir)
    Level 30 = 0 dB, each level down = -2 dB. */
 void sound_apply(void)
 {
+	cfg.vol = (uint8_t)snd_vol; cfg.muted = (uint8_t)snd_muted;   /* saved by settings.c */
 	int level = snd_muted ? 0 : snd_vol;
 	if (level <= 0) { bd(0x20, 0xFF); return; }
 	if (level > SOUND_MAX) level = SOUND_MAX;

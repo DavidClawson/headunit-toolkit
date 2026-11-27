@@ -50,8 +50,8 @@ def main():
         sys.exit(0 if ok else 1)
     prog = open(a.input, "rb").read()
     prog += b"\0" * (-len(prog) % 4)
-    if len(prog) > c["FW_MAX"]:
-        sys.exit(f"{len(prog)} bytes: too big for the slot ({c['FW_MAX']})")
+    if len(prog) > c["FW_APP_MAX"]:
+        sys.exit(f"{len(prog)} bytes: too big ({c['FW_APP_MAX']} max: the slot's last 4 KB holds settings)")
     hdr = struct.pack("<5I", c["FW_MAGIC"], c["FW_VERSION"], c["FW_LOAD"], len(prog), checksum(prog))
     img = hdr.ljust(512, b"\0") + prog
     out = a.out or os.path.splitext(a.input)[0] + ".fw"

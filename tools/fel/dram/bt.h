@@ -15,6 +15,7 @@ typedef struct {
 	uint32_t pos_ms;        /* millis() when pos arrived, to run the clock between updates */
 	int call;               /* BT_CALL_* */
 	char number[32];        /* caller / callee */
+	char caller[48];        /* contact name, when the phone sends one (IQ line) */
 	uint32_t call_ms;       /* millis() when the call was answered */
 } bt_state;
 

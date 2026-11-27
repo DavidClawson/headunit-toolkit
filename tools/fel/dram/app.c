@@ -26,6 +26,7 @@
 #include "bt.h"
 #include "bt_ui.h"
 #include "call_ui.h"
+#include "settings.h"
 #include "tuner.h"
 
 #ifndef SECONDS
@@ -138,8 +139,8 @@ static void freeze_test(void)
 
 static void open_page(void)
 {
-	if (st.page == 0) radio_open();
-	if (st.page == 1) bt_ui_open();
+	if (st.page == 0) { radio_open(); cfg.source = SRC_RADIO; }
+	if (st.page == 1) { bt_ui_open(); cfg.source = SRC_BT; }
 }
 
 /* returns 1 if the screen needs redrawing */
@@ -222,8 +223,13 @@ int main(void)
 	int nor = fw_init();
 	if (display_up(FB0)) { logf("app: display_up failed\n"); return 1; }
 	int ti = input_init();
-	mcu_key_led(LED_WHITE);                            /* stops the buttons colour-cycling */
+	settings_load();
+	snd_vol = cfg.vol; snd_muted = cfg.muted;
+	mcu_key_led(cfg.led);                              /* also stops the buttons colour-cycling */
 	bt_init();
+	/* resume the last source, on its page (Back goes home) */
+	st.page = st.focus = cfg.source == SRC_BT ? 1 : 0;
+	open_page();
 	fw_boot_ok();                                      /* up: the selector's watchdog can stand down */
 	str_cat(st.status, ti ? "touch not answering; keys only" : "ready: touch a tile or turn the knob");
 	logf("app: input_init %d, %s\n", ti, nor ? "booted from NOR" : "under FEL");
@@ -234,6 +240,7 @@ int main(void)
 	uint32_t t0 = millis();
 	while (nor || millis() - t0 < SECONDS * 1000u) {
 		fw_pet();
+		settings_tick();
 		event e;
 		while (input_next(&e)) {
 			events++;
@@ -267,7 +274,16 @@ int main(void)
 		}
 		dirty |= radio_tick() && st.page == 0;
 		if (call_ui_tick()) { dirty = 1; st.pressed = -1; st.hold_t0 = 0; }
-		dirty |= bt_poll() && (st.page == 1 || bt.call);
+		{
+			static int was_playing;
+			dirty |= bt_poll() && (st.page == 1 || bt.call);
+			/* the phone started playing: follow it, unless the Radio page is open */
+			if (bt.playing && !was_playing && !bt.call && st.page != 0 && snd_input != SOUND_IN_BT) {
+				sound_input(SOUND_IN_BT);
+				cfg.source = SRC_BT;
+			}
+			was_playing = bt.playing;
+		}
 		dirty |= st.page == 1 && bt_ui_tick();
 		int b = now_ms() < st.banner_until || (st.page == 0 && radio_note());
 		if (b != banner) { banner = b; dirty = 1; }

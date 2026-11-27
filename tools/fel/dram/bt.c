@@ -48,6 +48,8 @@ static void copy_field(char *dst, unsigned cap, const char *s, unsigned len)
 	dst[o] = 0;
 }
 
+static unsigned strlen_(const char *s) { unsigned k = 0; while (s[k]) k++; return k; }
+
 static unsigned num(const char *s, unsigned k)
 {
 	unsigned v = 0;
@@ -58,7 +60,6 @@ static unsigned num(const char *s, unsigned k)
 static int handle(void)
 {
 	if (n < 2) return 0;
-	if (line[0] == 'I' || line[0] == 'P') logf("bt: %s\n", line);   /* call / phone lines, for now */
 	char a = line[0], b = line[1];
 	const char *d = line + 2;
 	unsigned dl = n - 2;
@@ -89,11 +90,21 @@ static int handle(void)
 		bt.connected = 1;
 		return 1;
 	}
+	if (a == 'I' && b == 'Q') {                          /* number FF name: the phone's contact lookup */
+		unsigned i = 0;
+		while (i < dl && (uint8_t)d[i] != 0xFF) i++;
+		if (i) copy_field(bt.number, sizeof bt.number, d, i);
+		if (i < dl) {
+			copy_field(bt.caller, sizeof bt.caller, d + i + 1, dl - i - 1);
+			for (int k = (int)strlen_(bt.caller) - 1; k >= 0 && bt.caller[k] == ' '; k--) bt.caller[k] = 0;
+		}
+		return 1;
+	}
 	if (a == 'I' && b == 'G') { bt.call = BT_CALL_ACTIVE; bt.call_ms = millis(); return 1; }
-	if (a == 'I' && b == 'F') { bt.call = BT_CALL_NONE; bt.number[0] = 0; return 1; }
+	if (a == 'I' && b == 'F') { bt.call = BT_CALL_NONE; bt.number[0] = bt.caller[0] = 0; return 1; }
 	if (a == 'I' && b == 'A') {
 		bt.connected = bt.playing = 0;
-		bt.call = BT_CALL_NONE; bt.number[0] = 0;
+		bt.call = BT_CALL_NONE; bt.number[0] = bt.caller[0] = 0;
 		bt.title[0] = bt.artist[0] = bt.album[0] = 0; bt.pos = bt.len = 0;
 		return 1;
 	}

@@ -1,6 +1,7 @@
 /* call_ui.c: phone calls through the Bluetooth module. Ringing: Answer /
    Decline. Dialling or in a call: Hang up. The sound input follows the call
-   (Bluetooth during it, back to what was playing after). */
+   (Bluetooth during it; after it, Bluetooth if the phone is
+   playing music, else back to what was playing before). */
 #include "lib.h"
 #include "gfx.h"
 #include "bt.h"
@@ -46,14 +47,17 @@ void call_ui_draw(int pressed)
 	const char *t = bt.call == BT_CALL_RINGING ? "Incoming call" :
 	                bt.call == BT_CALL_OUTGOING ? "Calling..." : "On a call";
 	gfx_text(640 - gfx_text_w(t, &font16x32, 1) / 2, 150, t, &font16x32, 1, 0x8ce99a);
-	const char *n = bt.number[0] ? bt.number : "Unknown number";
+	/* contact name big with the number under it; or just the number */
+	const char *n = bt.caller[0] ? bt.caller : bt.number[0] ? bt.number : "Unknown number";
 	int sc = gfx_text_w(n, &font16x32, 2) <= 760 ? 2 : 1;
-	gfx_text(640 - gfx_text_w(n, &font16x32, sc) / 2, 240, n, &font16x32, sc, 0xffffff);
+	gfx_text(640 - gfx_text_w(n, &font16x32, sc) / 2, 222, n, &font16x32, sc, 0xffffff);
+	if (bt.caller[0] && bt.number[0])
+		gfx_text(640 - gfx_text_w(bt.number, &font16x32, 1) / 2, 300, bt.number, &font16x32, 1, 0xc8d4ec);
 	if (bt.call == BT_CALL_ACTIVE) {
 		char s[16], *p;
 		unsigned sec = (millis() - bt.call_ms) / 1000;
 		p = str_u(s, sec / 60); *p++ = ':'; *p++ = (char)('0' + sec % 60 / 10); *p++ = (char)('0' + sec % 10); *p = 0;
-		gfx_text(640 - gfx_text_w(s, &font16x32, 1) / 2, 350, s, &font16x32, 1, 0xc8d4ec);
+		gfx_text(640 - gfx_text_w(s, &font16x32, 1) / 2, 370, s, &font16x32, 1, 0x8ce99a);
 	}
 	if (bt.call == BT_CALL_RINGING) {
 		button(C_ANSWER, "Answer", pressed == C_ANSWER, 0x2b8a3e);
@@ -83,7 +87,7 @@ int call_ui_tick(void)
 	int ch = 0;
 	if (bt.call != last_call) {
 		if (!last_call) { saved_input = snd_input; sound_input(SOUND_IN_BT); }
-		if (!bt.call) sound_input(saved_input);
+		if (!bt.call) sound_input(bt.playing ? SOUND_IN_BT : saved_input);   /* music resumed: stay on BT */
 		logf("call: state %d -> %d\n", last_call, bt.call);
 		last_call = bt.call; ch = 1;
 	}
