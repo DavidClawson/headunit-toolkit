@@ -788,3 +788,133 @@ program into the boot firmware (`tools/fel/dram/tuner.c`, `radio_ui.c`):
   `tools/fel/felrun.py doom/doom.bin --load 0x43800000:doom/doom1.wad --timeout 3600`
 - **To consider:** turning the D-cache on in the head-unit app too. The UI
   draws with the cache off today (a full home screen took 44 ms).
+
+**USB device mode from our own code (2026-11-27).** `tools/fel/dram/musb.c`
+is a polled driver for USB0's MUSB controller in device mode. It handles
+endpoint 0 (standard requests, plus a class hook) and bulk/interrupt
+endpoints. Register offsets follow Allwinner's remapping (Linux
+`drivers/usb/musb/sunxi.c`, used as a reference).
+
+`usbtest.c` takes over the port from the boot ROM's FEL device and comes back
+as a **CDC-ACM serial port**. On the Mac it shows up as
+`/dev/cu.usbmodemF133_00011` ("Head Unit serial (USB test)", `1209:0001`, the
+pid.codes test ID) **at high speed**, 1.2 s after the takeover. It sends a line
+every second and echoes what the Mac sends. Run it with
+`felrun.py dram/usbtest.bin --usb-serial 30`.
+
+- **The trap: the boot ROM drives FEL's USB with interrupts and leaves them
+  on.** At first its own handler answered the host. The Mac saw a nameless
+  device (the boot ROM re-enumerating as FEL), our counters stayed at
+  0 resets / 0 setups, and the screen went white. With our own `mtvec`, the
+  first USB interrupt landed in our crash screen as mcause `0x8000…000B`
+  (machine external interrupt).
+  Fix: `csrci mstatus, MIE` and `mie = 0` before taking over. Anything that
+  takes over a boot-ROM peripheral under FEL needs this.
+- **No clock or PHY set-up was needed under FEL:** the boot ROM leaves USB0
+  powered, clocked and routed to the MUSB. For NOR boot, the PHY and clocks
+  will need setting up ourselves.
+- **Debugging aids kept in `usbtest.c`:** live enumeration stats on screen,
+  the last 6 SETUP packets in hex, and a red crash screen showing mcause, mepc
+  and mtval.
+- **Next:** CDC-NCM, so the Mac gets a network interface to the unit. That's
+  the transport CarPlay runs over, testable without an iPhone.
+
+**USB networking (CDC-NCM) to the Mac (2026-11-27).** `ncmtest.c` turns the
+unit into a USB network adapter. It reuses `musb.c`, which now tracks
+`SET_INTERFACE` and sends whole multi-packet transfers. NCM is the transport
+wired CarPlay runs over, so the Mac stands in for the iPhone here. macOS
+needs no driver: a new interface (`en14`) appears 1.6 s after the takeover.
+A tiny responder on the unit (no IP stack yet) handles:
+- **DHCP:** gives the Mac `192.168.133.2`, with no router or DNS, so the Mac's
+  own routes are untouched;
+- **ARP and ping** for `192.168.133.1`.
+
+Results: the Mac had its address 4.7 s after the takeover; **10/10 pings at
+~0.9 ms**; 1,000-, 1,400- and **1,472-byte** pings (full 1,500-byte packets,
+three USB packets each way) all answered. The unit's counters: 1 bus reset,
+16 setups, high speed, 77 frames in (IPv4 and IPv6), 14 out, **0 bad NTBs**.
+
+- **Notes:**
+  - NTB-16 only; one datagram per IN NTB; OUT NTBs are capped at 2 KB.
+  - The interface comes up after `SET_INTERFACE` alt 1 plus a
+    `CONNECTION_SPEED_CHANGE` and `NETWORK_CONNECTION` notification on EP1.
+  - macOS ignores the iMACAddress string (`ether 02:00:00:00:00:00`).
+- **Run:** `felrun.py dram/ncmtest.bin --usb-net 60` finds the interface,
+  waits for DHCP and pings.
+- **Toward CarPlay:**
+  - CarPlay additionally needs iAP2 on a second interface and the USB role
+    switch.
+  - `carplay.mod` brings its own lwIP, so the host only passes NCM frames
+    through `ncm_send_cb` (see `docs/carplay-host.md`).
+
+**USB host mode: our code reads an iPhone (2026-11-27).** `iphonetest.c`
+(read-only) switches USB0 to host and reads the device, configuration and
+string descriptors of whatever plugs in. It sends nothing else: no
+`SET_CONFIGURATION`, no vendor requests, and the serial-number string is not
+read. Run it with `felrun.py dram/iphonetest.bin --detach`, then swap the Mac's
+cable for the device.
+
+- **The ports:**
+  - **USB-A is USB0** (the FEL port, dual-role MUSB) and the **wired CarPlay
+    port**: stock starts wired CarPlay there.
+  - **USB-C is the other controller** (USB1, host-only): it charges, but stock
+    won't start CarPlay there, and our USB0 code doesn't see devices on it.
+- **USB-A's 5 V is a GPIO: PD18** (`usb0PowerGpio=318` in the unit's
+  `Config.ini`, decoded earlier in this log). Without it, nothing connects.
+- **The role switch:** the MUSB picks host or device when a session starts.
+  End the FEL session (`DEVCTL = 0`), force the PHY's ID low and VBUS valid
+  (ISCR at `USB0 + 0x400`), turn on PD18, then start a session
+  (`DEVCTL = 1`). `DEVCTL` then reads `0x5D` (host) once a device is attached.
+- **Result:** the iPhone reads as `05AC:12A8` "Apple Inc." / "iPhone" at high
+  speed, with 0 errors. It has 4 configurations:
+  1. PTP;
+  2. USB audio + HID;
+  3. PTP + usbmux (`FF/FE/02`);
+  4. PTP + usbmux + tethering (`FF/FD/01`, 3 alts).
+
+  There are no CarPlay interfaces, as expected: after the role switch the
+  iPhone is the host and the head unit presents iAP2 + NCM.
+- **Not charging** during the test: we never configure the phone, and Apple
+  phones also look for charger signalling.
+- **Next:** the role-switch request and the device-side interfaces stock
+  presents afterwards.
+
+**The wired-CarPlay role switch works, and the iPhone answers iAP2
+(2026-11-27).** `carplaytest.c` does what stock does (`docs/carplay-usb.md`):
+1. USB0 is host, with PD18 on for USB-A's 5 V. It reads the iPhone's device
+   descriptor and sends `SET_CONFIGURATION 1`.
+2. It sends `C0 53` (the phone answers `01 00 00 00`), then `40 51` (wValue 0).
+3. The phone drops off the bus about 66 ms later and comes back as the **host**.
+4. USB0 then presents stock's gadget: `0525:A4A1`, iAP `FF/F0/00` "iAP
+   Interface", and CDC-NCM.
+
+On the bench (iPhone, iOS current as of today):
+- 1 bus reset and 17 SETUPs;
+- **configured at high speed**;
+- the phone reads strings 4–6;
+- it answers our iAP2 detect packet (`FF 55 02 00 EE 10`) with the same 6 bytes.
+
+There was no pop-up, and the phone charges throughout. NCM stays down (the
+phone never selects alt 1 on interface 2): iOS only brings it up inside a
+CarPlay session, which needs iAP2 link set-up and MFi authentication.
+
+**The host-to-device switch needs a full controller reset.** Clearing
+`DEVCTL`, forcing ID high and reconnecting leaves the MUSB in a state where no
+host sees it, even after 8 reconnects with gaps of up to 2 s. Adding stock's
+PHY steps (`0x410` VBUSVLDEXT/SIDDQ, `0x420` OTG select) doesn't help. What
+works: pulse the USBOTG0 reset in the CCU (`USB_BGR` `0x02001A8C` bit 24),
+then set ISCR, the PHY and the device registers from scratch.
+
+Found with `carplaymac.bin` (`-DMACTEST`), a self-test against the Mac that
+needs no iPhone:
+1. 3 s in host mode;
+2. each variant for 8 s;
+3. only variant 2 enumerates on the Mac (as "NCM Gadget", high speed).
+
+Stock gets the same effect by unloading its EHCI host driver and initialising
+the UDC.
+
+**Next:** the iAP2 link layer (SYN/ACK packets on the iAP endpoints), then
+identification. Authentication needs the MFi chip on `/dev/twi2` (0x10),
+which is the point where `carplay.mod` (or our own iAP2 code) has to take
+over.
