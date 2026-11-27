@@ -43,13 +43,37 @@ static int start(uint8_t a8)
 
 static void sel(unsigned bus) { base = 0x02502000u + 0x400u * bus; }
 
+/* field helpers: 4-bit function fields and 2-bit pull fields */
+static void fn(uint32_t reg, unsigned sh, unsigned f) { wr32(reg, (rd32(reg) & ~(0xFu << sh)) | (f << sh)); }
+static void pu(uint32_t reg, unsigned sh) { wr32(reg, (rd32(reg) & ~(3u << sh)) | (1u << sh)); }
+static unsigned fget(uint32_t reg, unsigned sh) { return (rd32(reg) >> sh) & 0xF; }
+
+/*
+ * TWI1 can come out on three pin pairs (F133 datasheet): 0 = PB4/PB5 fn 4,
+ * 1 = PE0/PE1 fn 4, 2 = PG8/PG9 fn 3. Muxes the chosen pair with pull-ups and
+ * turns the others back into inputs (only pins currently in their TWI1
+ * function, so a GPIO use such as PB5 as an output is left alone).
+ */
+void twi1_route(unsigned pair)
+{
+	static const struct { uint32_t cfg, pull; unsigned sh0, sh1, psh0, psh1, f; } p[3] = {
+		{ 0x02000030, 0x02000054, 16, 20,  8, 10, 4 },   /* PB4, PB5 */
+		{ 0x020000C0, 0x020000E4,  0,  4,  0,  2, 4 },   /* PE0, PE1 */
+		{ 0x02000124, 0x02000144,  0,  4, 16, 18, 3 },   /* PG8, PG9 */
+	};
+	for (unsigned i = 0; i < 3; i++) {
+		if (i == pair) continue;
+		if (fget(p[i].cfg, p[i].sh0) == p[i].f) fn(p[i].cfg, p[i].sh0, 0);
+		if (fget(p[i].cfg, p[i].sh1) == p[i].f) fn(p[i].cfg, p[i].sh1, 0);
+	}
+	if (pair > 2) return;
+	fn(p[pair].cfg, p[pair].sh0, p[pair].f); fn(p[pair].cfg, p[pair].sh1, p[pair].f);
+	pu(p[pair].pull, p[pair].psh0);           pu(p[pair].pull, p[pair].psh1);
+}
+
 void twi_init(unsigned bus)
 {
-	if (bus == 1) {                /* PB4 SCK, PB5 SDA: function 4, pull-up (radio tuner). sys_config's
-	                                  PG14 is wrong: PG14 function 4 is EMAC (Linux pinctrl-sun20i-d1.c) */
-		wr32(0x02000030, (rd32(0x02000030) & ~(0xFFu << 16)) | (4u << 16) | (4u << 20));
-		wr32(0x02000054, (rd32(0x02000054) & ~(0xFu << 8)) | (1u << 8) | (1u << 10));
-	}
+	if (bus == 1) twi1_route(0);
 	if (bus == 2) {                /* PE12 SCL, PE13 SDA: function 2, pull-up (sound processor, MFi, camera) */
 		wr32(0x020000C4, (rd32(0x020000C4) & ~(0xFFu << 16)) | (2u << 16) | (2u << 20));
 		wr32(0x020000E4, (rd32(0x020000E4) & ~(0xFu << 24)) | (1u << 24) | (1u << 26));
@@ -58,6 +82,12 @@ void twi_init(unsigned bus)
 		wr32(0x02000124, (rd32(0x02000124) & ~(0xFFu << 8)) | (3u << 8) | (3u << 12));
 		wr32(0x02000144, (rd32(0x02000144) & ~(0xFu << 20)) | (1u << 20) | (1u << 22));
 	}
+	twi_ctrl_init(bus);
+}
+
+/* controller only: clock gate, reset, 100 kHz; leaves the pins alone */
+void twi_ctrl_init(unsigned bus)
+{
 	sel(bus);
 	wr32(0x0200191C, rd32(0x0200191C) | (1u << bus) | (1u << (16 + bus)));
 	wr32(base + 0x18, 1);

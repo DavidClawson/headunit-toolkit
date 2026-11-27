@@ -30,10 +30,10 @@ Legend:
 | Part | Config / code says | On the board | Evidence |
 |---|---|---|---|
 | Sound processor | `audioChip=0` (BD3702), `/dev/twi2` | ✅ answers at TWI2 `0x40` (write-only) | bus scan |
-| Tuner | `bArmRadio=1`, `radioModule=0` (Si4730), `/dev/twi1`, reset `PB5` | ❌ **nothing answers on TWI1**, on either pin set; `ANT` module footprint empty | bus scans; photo |
-| TWI1 pins | `sys_config`: PG14 / PB4 | ❌ PG14 can't be I2C; real pins PB4 / PB5 (and PB5 is the "radio reset") | Linux pin-mux table |
-| FM radio | works in stock | ✅ 101.1 MHz from the rear RCA | iMic recording; **source unknown** ([issue #2](https://github.com/DavidClawson/headunit-toolkit/issues/2)) |
-| RDS | `bHaveRds=0` | ❓ | test: set `bHaveRds=1` in Config.ini |
+| Tuner | `bArmRadio=1`, `radioModule=0` (Si4730), `/dev/twi1`, reset `PB5` | ✅ **Si4730 rev D, fw 6.0, at `0x11`**, on a **bit-banged** bus: SCL PG14, SDA PB4 (the kernel's software TWI); reset PB5 active-low | `bbscan.c`, `radio.c` (plays 101.1) |
+| TWI1 pins | `sys_config`: PG14 / PB4 | ✅ right, but as **GPIOs**: the kernel bit-bangs TWI1 there. Hardware TWI1 (PB4/PB5, PE0/PE1, PG8/PG9) has nothing on it | F133 datasheet; scans |
+| FM radio | works in stock | ✅ **and from our code**: 101.1 MHz, RSSI ~50 dBµV, SNR ~28 dB, stereo | iMic recordings |
+| RDS | `bHaveRds=0` | ❌ likely: the Si4730 has no RDS decoder (the Si4731 does) | GET_REV part number |
 | AM | `bAmEnable=1` | ❓ | |
 | Speaker amp | no amp pin anywhere | ❓ chip unknown | [issue #3](https://github.com/DavidClawson/headunit-toolkit/issues/3) |
 | Rear RCA out | — | ✅ line level, stereo | iMic |
@@ -67,7 +67,7 @@ Legend:
 
 ## Notes
 
-- **Contradictions found so far:** tuner, TWI1 pins, RAM size, `bCapacitiveScreen`,
+- **Contradictions found so far:** (the tuner turned out fine: bit-banged bus), RAM size, `bCapacitiveScreen`,
   DVD, microSD.
 - **`sourceValid=995757`** is a bitmask of the sources the UI offers. Decoding it
   against the app's source table would show which features the vendor meant

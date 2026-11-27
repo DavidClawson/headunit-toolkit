@@ -566,3 +566,51 @@ a couple of minutes later (heartbeat unanswered); the unit came back up in ours.
   the BD3702), UART1 TX (every frame stock sends the MCU); (3) the debug UART log
   (`bPrintLog=1`, PB6 at 576000) would answer it directly, but needs the case
   open and a safer connection than hand-soldering.
+
+**A tuner does answer in stock (2026-11-27).** On the bench unit, stock radio
+scan fills empty presets, and seek and step tuning work. Those need tuner
+readback (station valid, RSSI), and the app's only radio path is I2C to an
+Si473x at `0x11` on `/dev/twi1`. So the tuner exists and answers in stock; FEL
+hasn't reached it yet. The F133 datasheet lists three TWI1 pin options:
+- PB4/PB5, function 4: scanned, empty;
+- PE0/PE1, function 4: not scanned yet;
+- PG8/PG9, function 3: not scanned yet. PG8 is also the GT911 reset line.
+
+`sys_config`'s PG14 can't be TWI1 at all. Next FEL test: full MCU start-up plus
+radio mode, then scan TWI1 on all three pin pairs.
+
+**🎉 Radio from our own code (2026-11-27).** The tuner bus is **bit-banged**: the
+stock Melis kernel has a software I2C driver (`hal_twi_sim_*`) and runs
+`/dev/twi1` on plain GPIOs, **SCL = PG14, SDA = PB4**, exactly as the board config
+says. (The config isn't wrong; PG14 just can't be the *hardware* TWI1.) PB5 is
+the tuner's reset (active-low), as `radioResetGpio=105` says.
+- **Found by** `tools/fel/dram/bbscan.c`, a software I2C scan after the MCU
+  start-up plus radio mode: `0x11` answers on PG14/PB4 and nothing on the other
+  combinations.
+- **`radio.c` over `bbi2c.c` (software I2C, ~50 kHz):**
+  - POWER_UP FM `01 D0 05`;
+  - GET_REV: **Si4730, firmware 6.0, revision D**;
+  - the app's 33 properties;
+  - tune 101.1 MHz in 43 ms: valid, RSSI 72 dBµV, SNR 26 dB;
+  - BD3702 init, input `0x0B`, volume `0x8A`.
+- **Rear RCA level 0.010 RMS, the same as stock (0.009).** Signal over 30 s:
+  RSSI 48–52 dBµV, SNR 25–29 dB, 100 % stereo (coat-hanger antenna).
+- **Input sweep:** the radio is heard on several BD3702 input codes besides
+  `0x0B` (silent on others). The exact input-selector mapping is still to work out.
+- **Not yet checked:** whether the MCU start-up is needed at all (it may only
+  matter for the MCU's own reasons), and whether RDS works. The Si4730 has no
+  RDS; its sibling the Si4731 does.
+- **Kernel analysis confirms it** (static, `melis_pkg` kernel at 0x40000000):
+  - **Every `/dev/twiN` uses the software driver** (`init_twi_device` registers
+    twi0–4 with the sim ops). That includes `/dev/twi2` for the BD3702 and the
+    MFi chip.
+  - Only the touch driver uses the hardware TWI controller.
+  - **Pins come from `[twiN]` with the function forced to 0 (GPIO)** and pull-ups
+    on. The first entry is SCL, the second SDA.
+  - **SCL is push-pull with no clock stretching.** SDA is released only for ACK
+    and read phases.
+  - Default 100 kHz means a ~6 µs half-period, about 80 kHz in practice.
+  - **The kernel does nothing to power the tuner,** and the config has no
+    tuner pin besides the reset. So the tuner is likely always powered, and the
+    MCU start-up may not be needed for the radio (untested).
+  - `[twi_para]` is a bootloader setting the kernel never reads.

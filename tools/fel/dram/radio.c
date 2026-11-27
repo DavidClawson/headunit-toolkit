@@ -3,8 +3,9 @@
  * to flash. Sequence, from the stock app (init.axf, see docs/radio.md):
  *   1. MCU source = Radio: 02 80 A7 02 04 00 21 on UART1 (believed to power
  *      the tuner), then log what the MCU says for a second.
- *   2. TWI1 scan; Si4730 expected at 0x11 once powered.
- *   3. Si4730: reset (PB5 low 100 ms, high 50 ms), POWER_UP FM, GET_REV,
+ *   2. Reset pulse on PB5, then scan TWI1 on all three pin pairs the F133
+ *      offers (PE0/PE1, PG8/PG9, PB4/PB5); the Si4730 is expected at 0x11.
+ *   3. Si4730 on the pair that answers: POWER_UP FM, GET_REV,
  *      the app's 31 properties + blend, FM_TUNE_FREQ 101.1 MHz, tune status.
  *   4. BD3702 (TWI2 0x40): the app's init table, input 0x05 = 0x0B (radio),
  *      volume 0x20 = 0x8A (-10 dB).
@@ -13,6 +14,7 @@
 #include "lib.h"
 #include "twi.h"
 #include "uart.h"
+#include "bbi2c.h"
 
 #define SI   0x11
 #define BD   0x40
@@ -63,12 +65,12 @@ static void scan(unsigned bus)
 /* send a command, wait for CTS, read the response (status byte first) */
 static int si_cmd(const uint8_t *c, unsigned n, uint8_t *resp, unsigned rn)
 {
-	int e = twi_write(1, SI, 0, 0, c, n);
+	int e = bb_write(SI, c, n);
 	if (e) return e;
 	uint8_t st[16];
 	uint32_t t0 = ticks();
 	for (;;) {
-		e = twi_read(1, SI, 0, 0, st, rn ? rn : 1);
+		e = bb_read(SI, st, rn ? rn : 1);
 		if (e) return e;
 		if (st[0] & 0x80) break;
 		if (elapsed_ms(t0) > 500) return 100;
@@ -119,31 +121,28 @@ int main(void)
 	logf(" B7 02\n"); mcu_send(0xB7, b7, 1); mcu_listen(300);
 	logf(" C3\n"); mcu_send(0xC3, 0, 0);   mcu_listen(500);
 	static const uint8_t b3on[1] = { 0x01 }, b3off[1] = { 0x00 };
-	logf(" B3 01 (MCU-radio init, sent only when bArmRadio=0)\n"); mcu_send(0xB3, b3on, 1); mcu_listen(500);
-	logf(" B3 00\n"); mcu_send(0xB3, b3off, 1); mcu_listen(500);
+	(void)b3on; (void)b3off;
 	logf(" BA\n"); mcu_send(0xBA, 0, 0);   mcu_listen(300);
 	logf(" A7 0F 00\n"); mcu_send(0xA7, a7f, 2); mcu_listen(300);
 	logf(" B0 CE 01 (host up)\n"); mcu_send(0xB0, ce, 5); mcu_listen(300);
 	logf(" A7 04 00 (radio)\n"); mcu_send(0xA7, src, 2); mcu_listen(3000);
 
-	logf("2. scan\n");
-	twi_init(1);
-	twi_init(2);
-	scan(1);
-	scan(2);
-
-	logf("3. Si4730\n");
-	wr32(0x02000030, (rd32(0x02000030) & ~(0xFu << 20)) | (1u << 20));   /* PB5 output */
+	logf("2. tuner bus: bit-banged I2C, SCL = PG14, SDA = PB4 (as the stock kernel does)\n");
+	wr32(0x02000030, (rd32(0x02000030) & ~(0xFu << 20)) | (1u << 20));   /* PB5 output: radio reset */
 	wr32(0x02000040, rd32(0x02000040) & ~(1u << 5));
 	udelay(100000);
 	wr32(0x02000040, rd32(0x02000040) | (1u << 5));
 	udelay(50000);
-	scan(1);
-	for (int i = 0; i < 50 && twi_write(1, SI, 0, 0, 0, 0) != TWI_OK; i++) udelay(100000);
+	bb_init();
+	twi_init(2);
+	int found = bb_write(SI, 0, 0) == 0;
+	logf("  Si4730 at 0x11: %s\n", found ? "answers" : "NO ANSWER");
+	if (!found) goto sound;
+	logf("3. Si4730\n");
 	static const uint8_t pu[3] = { 0x01, 0xD0, 0x05 };
 	int e = si_cmd(pu, 3, 0, 0);
 	logf("  POWER_UP: %d\n", e);
-	if (e) { logf("  no tuner on TWI1 (expected on this board): skipping to the sound processor\n"); goto sound; }
+	if (e) { logf("  device found but POWER_UP failed: skipping to the sound processor\n"); goto sound; }
 	udelay(200000);
 	uint8_t r[9] = {0};
 	static const uint8_t rev[1] = { 0x10 };
@@ -179,15 +178,14 @@ sound:
 	v = 0x8A;         bad += twi_write(2, BD, 0x20, 1, &v, 1) != 0;
 	logf("  %u writes, %u failed; input 0x0B (radio), volume -10 dB\n",
 	     (unsigned)(sizeof bd_init / sizeof bd_init[0]) + 2, bad);
-	logf("5. MCU tune: B0 [60 00 00 hi lo], 10 kHz units (101.1 = 27 7E), 12 s\n");
-	static const uint8_t t1[5] = { 0x60, 0x00, 0x00, 0x27, 0x7E }, t2[5] = { 0x60, 0x00, 0x00, 0x03, 0xF3 };
-	mcu_send(0xB0, t1, 5); mcu_listen(12000);
-	logf("   100 kHz units (101.1 = 03 F3), 12 s\n");
-	mcu_send(0xB0, t2, 5); mcu_listen(12000);
-	logf("   radio source again, then 10 kHz tune again, 8 s\n");
-	mcu_send(0xA7, src, 2); mcu_listen(500);
-	mcu_send(0xB0, t1, 5); mcu_listen(8000);
-	logf("  keep-alives answered so far: %u\n", acks);
+	logf("5. radio input for 30 s, signal every 3 s (answering MCU keep-alives)\n");
+	for (int i = 0; i < 10; i++) {
+		static const uint8_t rsq[2] = { 0x23, 0x00 };
+		uint8_t q[8] = {0};
+		int er = si_cmd(rsq, 2, q, 8);
+		logf("  RSQ: %d  RSSI %u dBuV, SNR %u dB, stereo %u%%, valid %u\n", er, q[4], q[5], q[3] & 0x7F, q[2] & 1);
+		mcu_listen(3000);
+	}
 	for (uint8_t in = 0; in < 16; in++) { twi_write(2, BD, 0x05, 1, &in, 1); mcu_listen(1500); }
 	v = 0x0B; twi_write(2, BD, 0x05, 1, &v, 1);
 	logf("  keep-alives answered: %u\n", acks);
