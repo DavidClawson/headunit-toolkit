@@ -133,7 +133,7 @@ per `xfel exec` (request block at `0x40F00`). A bus scan takes about 0.5 s.
 
 | Bus | Pins | Device | How it was identified |
 |---|---|---|---|
-| TWI1 | PG14 SCL / PB04 SDA (func 4) | radio tuner (none answer in FEL) | `Config.ini` `radioI2cName=/dev/twi1`. Reset `radioResetGpio=105` = **PB5**, active-low (app numbering is port×100 + pin, A = 0). Still silent with PB5 high: **no tuner module fitted** on this build (`ANT` footprint empty, `bArmRadio=1`); FM runs on the Bluetrum companion chip over UART. |
+| TWI1 | PG14 SCL / PB04 SDA (func 4) | radio tuner (none answer in FEL) | `Config.ini` `radioI2cName=/dev/twi1`. Reset `radioResetGpio=105` = **PB5**, active-low (app numbering is port×100 + pin, A = 0). Still silent with PB5 high: the tuner is probably unpowered in FEL (`bArmRadio=1` = the F133 drives it over I2C; see `docs/mcu-protocol.md`). |
 | TWI2 | PE12 SCL / PE13 SDA (func 2) | `0x10`: **Apple MFi auth coprocessor** | `carplayI2cName=/dev/twi2`; `0x10` is the MFi chip's standard address; registers read all zero (not a tuner). |
 | TWI2 | | `0x40`: **sound processor, likely ROHM BD3702** | `audioI2cName=/dev/twi2`; app has a `CAudioBD3702` driver; write-only (refuses reads), as BD37xx parts are. |
 | TWI2 | | `0x44`: **Techpoint TP2850** camera decoder | Chip ID `0x28 0x50` at `0xFE/0xFF`; the kernel's `tp2804` driver (AHD/CVBS → BT656). |
@@ -158,7 +158,8 @@ was already at `0x5d` at power-on.
 - **UART1** (`mcuSerialName`, RX = PG13) and **UART4** (`btSerialName`, RX = PB03):
   no traffic in 5 s each. All four lines (PG12/PG13/PB02/PB03) read high even
   with the SoC's pull-down on, so they're held up externally: the link is
-  wired, but the Bluetrum only answers when the F133 talks first.
+  wired, but the MCU only answers when the F133 talks first (protocol in
+  `docs/mcu-protocol.md`).
 - **Don't `xfel read32` arbitrary addresses.** Reading the CLINT timer at
   `0x1400BFF8` hung FEL (needed a power-cycle). Probe unknown regions from
   your own payload instead.

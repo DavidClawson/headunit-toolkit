@@ -91,11 +91,11 @@ are physically (F133 pins 80/79), and the SPI-clip recovery procedure, are in
 The app numbers GPIOs as `port × 100 + pin` with A = 0 (so `318` = PD18). See
 [devlog](devlog.md) for the trace.
 
-**But this build has no I2C tuner:** the `ANT` module footprint is empty and
-`Config.ini` sets `bArmRadio=1`, so FM most likely runs on the Bluetrum
-`CHXC14B5B` companion chip (custom marking; the app references `AB5301_`),
-reached over a UART (`mcuSerialName=/dev/uart1` on PG12/PG13, or
-`btSerialName=/dev/uart4` on PB02/PB03). The I2C tuner drivers are for other builds.
+**`bArmRadio=1` means the F133 drives the tuner itself** over I2C ("ARM" is the
+vendor's name for the main SoC, as in `bArmCan`/`bArmDvd`). The separate `ANT`
+module footprint is empty on the bench board, and from FEL nothing answers on
+TWI1, so the tuner is probably powered off until the stock firmware enables it.
+Details and the MCU protocol: [mcu-protocol.md](mcu-protocol.md).
 
 The app has RDS fully compiled in — PS (station name), **RT (RadioText =
 song/artist)**, PTY, TA/TP, AF, EON — and drivers for many RDS-capable tuner

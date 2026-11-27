@@ -55,7 +55,7 @@ it's reverse-engineering facts and test results from a unit we own.
   drivers pulse it low ~20 ticks then high, so it's **active-low**.
 - **Released PB5 from FEL** (low pulse, then high): TWI1 still empty, with both
   bus lines idle high.
-- **Why: the radio isn't an I2C tuner on this build.** Photos of the bench board
+- **(Corrected below: this conclusion was wrong.)** **Why: the radio isn't an I2C tuner on this build.** Photos of the bench board
   show the 10-hole `ANT` tuner-module footprint **empty**, and the chip by the
   antenna can is a **Bluetrum ("AB") `CHXC14B5B`**, LQFP48, 26 MHz crystal
   (`YL260`). `Config.ini` has **`bArmRadio=1`** (the vendor calls the companion
@@ -73,6 +73,14 @@ it's reverse-engineering facts and test results from a unit we own.
   high externally (they stay high with the SoC's pull-down on). So the links are
   wired but command/response: the Bluetrum speaks only when spoken to. Next is
   reading the app's MCU protocol code and sending a harmless query.
+- **Correction, from tracing the app:** `bArm*` flags mean the **F133** ("ARM")
+  handles a feature instead of the external MCU. With `bArmRadio=1` the F133
+  runs its own tuner drivers over I2C (`radioI2cName=/dev/twi1`); the MCU radio
+  commands are the `bArmRadio=0` path. So the radio is *not* on the Bluetrum. The
+  empty TWI1 in FEL most likely means the tuner is unpowered there. Also mapped:
+  the MCU UART protocol (115200 baud, `02 80 CMD LEN DATA XOR`), its command
+  set, and a separate MCU firmware-update mode. See
+  [mcu-protocol.md](mcu-protocol.md).
 - **FEL CPU clock ≈ 408 MHz.** One self-inflicted hang: `xfel read32` of the
   CLINT timer (`0x1400BFF8`) froze FEL; a power-cycle brought it back in FEL.
 - **Next:** tuner reset pin, then panel init over MIPI-DSI,
