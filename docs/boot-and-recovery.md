@@ -328,6 +328,36 @@ What this gives:
    is now only the backstop. Details: `tools/fel/README.md`.
 4. **Clean stock → new firmware tests** once the above is proven on the bench.
 
+### Plan: boot our firmware from the NOR (agreed 2026-11-26, not yet built)
+
+boot0 after the FEL window (from the disassembly): DRAM init `0x27998`
+("dram size"), debug-key checks, clear `0x40800000`, then **`0x28d3c: jal
+0x284fa`** = load the Melis package: `0x2819c(0)` (flash init), `0x28080(128, 1,
+0x41000000)` (read sectors: start, count, destination), check magic
+`0x89119800`, read the whole package, then parse it and "Jump to second Boot.".
+
+- **Image:** header + program at NOR **`0x120000`** (64 KB, blank in every dump:
+  between the end of Melis at `0x120000` and MINFS at `0x130000`). Header: magic
+  `HUFW`, size, load address `0x40000000`, additive checksum. Built by `mkfw.py`.
+- **Selector:** a second hook in the boot0 patch (`tools/fel/bootsel/`), at
+  `0x28d3c`, reusing boot0's flash driver. Boots stock (tail-calls `0x284fa`) if
+  the image is missing/bad, or RTC **GP5** says `STOCK_ONCE` or `TRYING` (our
+  last attempt hung); clears GP5 either way. Otherwise GP5 = `TRYING`, watchdog
+  armed (8 s), image loaded, caches flushed, jump.
+- **Firmware:** `fw_boot_ok()` once display and input are up (clears `TRYING`,
+  disarms the watchdog). **Long-press the phone key (~2 s) = boot stock once**
+  (GP5 = `STOCK_ONCE`, watchdog reset). A return from `main` does the same.
+- **Default: ours** whenever a valid image is present. Permanent return to
+  stock-by-default: erase the image header over FEL.
+- **Safety:** nothing new runs before the FEL window. Hang → watchdog → stock on
+  that boot, ours again next power cycle. Bad patch → FEL window → write back
+  `boot0-felwin.bin`. Last resort: the clip. Writes to boot0 stay at exactly
+  48 KB: `0xC000`–`0x10000` holds data (not blank) and is left alone. A stock
+  USB-stick update may undo either part; the unit then simply boots stock.
+- **Order** (read-back verify after every write): offline build and dry-run →
+  image to `0x120000` (inert under stock boot0) → boot0 v2 → power-cycle → test
+  each fallback on purpose (long-press, corrupted header, an image that hangs).
+
 ## Other board notes (bench unit, opened 2026-11-24)
 
 - SoC: **F133-B** (eLQFP128). Bluetooth: Bluetrum "AB" LQFP48 with a 26 MHz
