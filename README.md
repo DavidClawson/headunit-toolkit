@@ -55,6 +55,8 @@ unit's own flash**:
   fonts, rendered on the device.
 - **Input:** GT911 touch over I2C, and the rotary knob/keys via the front-panel
   MCU (Bluetrum AB5301) over UART, all in one event loop.
+- **FM radio:** Si4730 tuner and BD3702 sound processor driven from our code;
+  signal strength, SNR and stereo readback.
 - **Boot selector:** a small patch to boot0 loads our image from NOR
   `0x120000`, checks it, and starts it under a watchdog.
 
@@ -69,10 +71,13 @@ hardware:
 | it freezes later | the watchdog restarts it back into ours |
 | anything worse | every boot opens a 3 s USB FEL window first, so it can be reflashed from a PC |
 
-**Not working yet (help wanted!):** audio. The stock app drives an Si4730 tuner
-that doesn't answer on this board, yet stock FM radio plays fine, so where the
-radio audio comes from is an open question. See the
-[open issues](https://github.com/DavidClawson/headunit-toolkit/issues).
+**FM radio now plays from our own code.** The tuner (an Si4730) sits on an I2C
+bus the stock kernel bit-bangs in software (PG14/PB4), which is why it hid from
+every hardware scan. The story is in [issue #2](https://github.com/DavidClawson/headunit-toolkit/issues/2)
+and [`docs/devlog.md`](docs/devlog.md). Still to come: a radio screen in the firmware
+(tuning, signal meter, scan), the amp's standby control, and CarPlay/Android Auto
+([`docs/strategy.md`](docs/strategy.md)). Help is welcome:
+see the [open issues](https://github.com/DavidClawson/headunit-toolkit/issues).
 
 **Getting started:** the first FEL entry needs the case open and a SOIC-8 clip on
 the SPI NOR (once). After that, everything runs over the front USB port. Start
@@ -138,7 +143,7 @@ user-facing menu text / translations — all **flash-and-go over USB**, no case
 opening, CarPlay/Android Auto preserved.
 
 **In progress / exploring (iterating in public):**
-- **Open firmware** (see above): audio and the radio are next; help wanted.
+- **Open firmware** (see above): a radio screen, amp control, then CarPlay/Android Auto on Melis.
 - Browser configurator — adding vendor-ZIP in/out and a menu-relabel &
   translation editor (the newly-validated lane).
 - Shareable engineer **config profiles** (`factory1.bin`) — decoding the format.
@@ -207,7 +212,7 @@ recovery doc.
   Bluetooth/OBD-II findings, and the Lua-host design. These come from static
   analysis of the stock image and will be confirmed or corrected on the bench.
 - **✅ Open firmware on the bench unit:** boots from NOR through a boot0
-  selector with tested fallbacks; display, touch and knob work. Audio not yet.
+  selector with tested fallbacks; display, touch, knob and FM radio work.
 
 Contributions, corrections, and especially **"I tried this on my unit and…"**
 reports are very welcome — this is exactly the stage where real-hardware data is
