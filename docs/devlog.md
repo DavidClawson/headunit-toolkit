@@ -965,3 +965,22 @@ The certificate is sent only to the phone and is never logged.
 
 **Next:** IdentificationInformation (`1D01`), which declares what the accessory
 supports. CarPlay over USB needs its own component.
+
+**Identification accepted, and the iPhone brings up the CarPlay network link
+(2026-11-27).** With stock's IdentificationInformation (our own name), the
+phone answers `1D02` IdentificationAccepted, then sends `4E0B`
+DeviceTimeUpdate and `AE01` PowerUpdate (after our `AE00`/`AE03`).
+
+It then starts on NCM with **`SET_CRC_MODE`** (`21 8A`, wValue 0). We advertise
+CRC support (bmNetworkCapabilities `0x11`, as stock does), so this request
+must be accepted: stalling it leaves the link down. With that fixed, the
+phone:
+- sets the packet filter (`21 43`);
+- selects alt 1 on interface 2 (**NCM up**);
+- sends IPv4 and IPv6 frames: 94 in the first ~20 s with 0 bad NTBs,
+  including DHCP requests (UDP 67) and mDNS (UDP 5353).
+
+**Next:** answer on that link. Stock uses a static 192.168.31.160 plus IPv6
+link-local, advertises `_airplay._tcp` and connects to the phone's
+`_carplay-ctrl._tcp` (`docs/carplay-iap2.md` section 4). That's the start of
+the CarPlay session proper.

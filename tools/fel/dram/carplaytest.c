@@ -253,6 +253,8 @@ static int g_setup(const uint8_t r[8], uint8_t *buf, const uint8_t *out, int out
 		return 28;
 	case 0x85: put32(buf, 2048); return 4;
 	case 0x86: case 0x43: case 0x84: case 0x88: return 0;
+	case 0x8A: return 0;                                 /* SET_CRC_MODE (we advertise it, as stock does): no CRC */
+	case 0x89: put16(buf, 0); return 2;                  /* GET_CRC_MODE */
 	case 0x83: put16(buf, 0); return 2;
 	case 0x87: put16(buf, 1514); return 2;
 	}
