@@ -1,0 +1,26 @@
+cmd,module_handler,log_string_or_effect,args_from_pbuffer,host_wrapper_in_init,confidence
+1,0xe887b970,"lib_net_init + lib_iap_init + lib_carplay_init (MFi probe, SPI-NOR licence check)","[0]=event_cb [1]=iap_send_cb_A [2]=iap_send_cb_B (host: 0xe92163b2, 0xe9216592, 0xe92165c4)",0xe9218a34,confirmed
+2,0xe887405c,lib_carplay_start,-,0xe9218a5e,confirmed
+3,0xe887426e,lib_carplay_stop,-,0xe9218a8e,confirmed
+4,0xe8874380,no-op (ret),-,0xe9218aa6,confirmed
+5,0xe8874382,lib_carplay_hide,-,0xe9218abe,confirmed
+6,0xe880e960,lib_iap_attach (phone plugged),-,0xe9218ad6,confirmed
+7,0xe880e99a,lib_iap_detach + StatusNotify(8),-,0xe9218aee,confirmed
+8,0xe88743f4,touch event (2 points),"u8 state, x1,y1,x2,y2 (u16)",0xe9218b06,inferred
+9,0xe8874580,lib_carplay_video w h,"w,h",0xe9218b3c,confirmed
+10,0xe8874650,lib_carplay_frame_rate,fps,0xe9218b8c,confirmed
+11,0xe8874666,set BT MAC (formats aa:bb:..),ptr to 6-byte addr,-,inferred
+12,0xe88746ce,key/knob event,u8,0xe9218bb2,inferred
+13,0xe880e9d4/0xe88836f8,USB data in: flag0=iAP2 link bytes; flag!=0 = NCM ethernet frame into internal lwIP,"u8 kind, ptr, len",0xe9218bd8 (called from /dev/udv rx callback 0xe921654a),confirmed
+14,0xe8874888,set string (0xe88e3648),char*,0xe9218c06,inferred
+15,0xe8874896,set licence/activation blob (0xe88e36b0; verified vs SPI-NOR UID/OTP in lib_carplay_init),char*,0xe9218c2c,inferred
+16,0xe88748a4,set pointer (0xe88e3718; used by AEC/audio setup),ptr,0xe9218c78,inferred
+17,0xe8874984,"set I2C device name (""carplay i2c name is %s""; Config.ini carplayI2cName=/dev/twi2)",char*,0xe9218c52,confirmed
+18,0xe880ea88,"set accessory/host name string (near ""host""/""car"")",char*,0xe9218c9e,inferred
+19,0xe887417a,lib_carplay_start_audio,-,0xe9218a76,confirmed
+20,0xe88748f8,select one of two constants (u8),u8,0xe9218cc4,unknown
+21,0xe8874916,lib_carplay_night_mode,u8,0xe9218cea,confirmed
+22,0xe88749ae,lib_carplay_disconnect,-,-,confirmed
+23,0xe88749e8,lib_carplay_reconnect,-,-,confirmed
+24,0xe8874628,lib_carplay_screen w h (physical),"w,h",0xe9218b64,confirmed
+25,0xe887496c,lib_carplay_audio_state,u8,0xe9218d10,confirmed
