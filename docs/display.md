@@ -95,3 +95,20 @@ Notes: the DE clock is pll-periph0-2x / 4 = 300 MHz (Linux asks 297 MHz). The
 D-cache is **off** under FEL (`mhcr` = `0x109`), so CPU writes reach the display
 engine without flushing; `lib.h` has `dcache_flush()` (`th.dcache.ciall`) for
 when it isn't.
+
+## Drawing on the device
+
+`tools/fel/dram/display.c` brings the pipeline up in one call (`display_up()`,
+a no-op if an earlier program left it running) and flips between two buffers,
+`FB0` = `0x41000000` and `FB1` = `0x41400000` (`display_flip()`).
+`gfx.c` draws in **landscape screen coordinates** (1280 × 720, rotation hidden):
+fill, outline, rounded rectangle, vertical gradient, text. Fonts are Spleen
+8×16 and 16×32 (BSD-2-Clause, Frederic Cambus), converted from BDF by
+`gen_font.py`. `ui.c` is the demo: a mock home screen.
+
+Measured (CPU 1008 MHz, D-cache off): full-screen clear 5.5 ms, the whole home
+screen (gradient, four tiles, ~200 glyphs) 44 ms.
+
+Open: `display_flip()` returns at once (`DBUFF` reads 0 straight after the
+write), so it doesn't yet wait for vblank. Fine for still screens; animation
+will want a real vblank wait (TCON `GINT0` line/vblank flags) to avoid tearing.

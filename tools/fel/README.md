@@ -15,7 +15,7 @@ the first-contact kit; the background is in
 | `pwm-backlight.sh` | Hardware PWM dimming on PWM7 (PD22, 50 kHz from 24 MHz / 480). `init`, `duty <0-100>`, `ramp [n]`, `status`. **Works** (2026-11-26). |
 | `i2c.c` / `i2c.py` | I2C over FEL: SRAM payload + host tool. `scan`, `read`, `write`, `gt911-id`, `gt911-touch`. **Works** (2026-11-26). |
 | `edges.c` / `uart_sniff.py` | Logic-analyser-style UART listener: timestamps every edge on an RX pin (mcycle, 0.2 µs polls), then estimates baud and decodes 8N1 on the Mac. `calibrate`, `listen uart1|uart4`. |
-| `felrun.py`, `dram/` | DRAM programs: `felrun.py dram/<prog>.bin` sets up RAM (`xfel ddr f133`, once per power-up), loads at `0x40000000`, runs, prints the program's log. `dram/lib.h` has MMIO, `udelay`, `ticks()`, `logf()`. Programs: `memtest`, `clock`, and the display stages `dsi1`–`dsi4` (`docs/display.md`). |
+| `felrun.py`, `dram/` | DRAM programs: `felrun.py dram/<prog>.bin` sets up RAM (`xfel ddr f133`, once per power-up), loads at `0x40000000`, runs, prints the program's log. `dram/lib.h` has MMIO, `udelay`, `ticks()`, `logf()`. Programs: `memtest`, `clock`, the display stages `dsi1`–`dsi4` (`docs/display.md`), and `ui` (home-screen demo on `display.c` + `gfx.c`). |
 | `fbshow.py` | Put an image on the LCD: after `felrun.py dram/dsi4.bin`, `fbshow.py picture.png` (scaled to 1280×720, rotated into the portrait buffer at `0x41000000`) or `fbshow.py --test`. ~8 s per frame over FEL. |
 | `bootsel/` | **FEL window in boot0** (see below): `stub.S`, `mkboot0.py <nor-backup>` builds `boot0-felwin.bin`. |
 | `fel-catch.sh` | Waits for the boot0 FEL window, disarms the watchdog, keeps the unit in FEL. Start it, then power-cycle. |

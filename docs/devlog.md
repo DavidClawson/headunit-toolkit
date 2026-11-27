@@ -464,3 +464,8 @@ over DSI. Corner markers pinned down the orientation (buffer x runs up the
 landscape screen, buffer y runs across). `tools/fel/fbshow.py` pushes any image
 over FEL in ~8 s, and the screen shows it as it arrives. The display is now
 ours: next is drawing on the device instead of from the host.
+
+And then **drawing on the device**: `display.c` (pipeline bring-up, double
+buffering) and `gfx.c` (landscape coordinates, rounded tiles, gradients,
+Spleen bitmap fonts). A mock home screen draws in 44 ms on the F133, against
+8 s to push one frame over FEL.
