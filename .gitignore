@@ -4,6 +4,7 @@
 *.fex
 *.bin
 *.fw
+*.s2
 *.mod
 *.drv
 stock/

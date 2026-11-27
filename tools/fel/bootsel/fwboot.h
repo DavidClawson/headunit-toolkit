@@ -31,3 +31,14 @@
 #define WDT_MODE       0x020500B8
 #define WDT_KEY        0x16AA0000
 #define FW_WDT_INTV    7                     /* WDT_MODE interval 7 = 8 s */
+
+/* Stage two (docs/boot-and-recovery.md, "Stage two"): the full firmware, loaded by
+   stage one (dram/stage1.c, the HUFW image above) from the unused tail of stock's
+   MINFS partition. Zero in every stock dump and referenced by no MINFS entry
+   (stock's files end at 0xD1D8E9). Same header layout as HUFW. */
+#define S2_ADDR        0xD20000              /* NOR: header sector, then the program */
+#define S2_END         0xF20000              /* stock's UDISK starts here: never touched */
+#define S2_MAX         (S2_END - S2_ADDR - 512)
+#define S2_MAGIC       0x32535548            /* "HUS2" little-endian */
+#define S2_VERSION     1
+#define S2_LOAD        0x40100000            /* stage one occupies 0x40000000.. */

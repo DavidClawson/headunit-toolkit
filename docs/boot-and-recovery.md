@@ -414,6 +414,46 @@ stock/nor/boot0-felwin-v1.bin`.
   image to `0x120000` (inert under stock boot0) → boot0 v2 → power-cycle → test
   each fallback on purpose (long-press, corrupted header, an image that hangs).
 
+### Stage two: room to grow (2026-11-27: built, written, fallbacks verified)
+
+The 0x120000 slot holds 60 KB, and the firmware had reached 54.6 KB. boot0 and
+the selector are unchanged; the slot now holds a small loader instead:
+
+- **Stage one** (`dram/stage1.c`, 3.6 KB, still a `HUFW` image at `0x120000`):
+  reads stage two from NOR **`0xD20000`**, checks it exactly as the selector
+  checks us (magic `HUS2`, version, load address `0x40100000`, size, additive
+  checksum), flushes the caches and jumps. **Any failure boots stock once**
+  (`fw_boot_stock`), the same outcome as a bad image at `0x120000`.
+- **Stage two** = the whole firmware, linked at `0x40100000` (`dram/stage2.ld`;
+  own stack at `0x43E00000`), **up to 2 MB**. It keeps the selector's handshake
+  unchanged: `fw_boot_ok()` once up, `fw_pet()` every loop pass.
+- **Where:** `0xD20000`–`0xF20000`, the unused tail of stock's MINFS partition.
+  Stock's files end at `0xD1D8E9`; the rest is zero padding in all 11 full dumps
+  and referenced by no MINFS entry. Stock boots and runs normally with stage two
+  there (radio, menus, CarPlay checked). `0xF20000`+ is stock's UDISK: never
+  touched. A stock USB update would overwrite the area, which only means
+  stage one falls back to stock.
+- **Write:** `tools/fel/s2-write.sh dram/app2.s2` (build: `make app2.s2`).
+  Refuses unless the area holds stock's zeros, erased flash or an earlier
+  stage-two image (tested against the real dumps, including a shifted layout);
+  erases only as far as needed, never past `0xF20000`; verifies the image, the
+  rest of the area and the `0x120000` slot (stage one, settings).
+- **Verified on the bench:**
+
+  | Test | Result |
+  |---|---|
+  | Stage one under FEL, area still stock zeros | logs `magic (0)`, returns |
+  | Stage one under FEL, stage two written | loads it from NOR, the app runs |
+  | Stock booted with stage two present | normal |
+  | Power-up with stage one + stage two | ours, settings and station kept |
+  | Hold the status bar 3 s | stock once |
+  | Stage two with one byte flipped (`ALLOW_BAD=1`) | straight to stock, no hang |
+  | Good stage two restored | ours again |
+
+**Updating from now on:** catch, power-cycle, `s2-write.sh dram/app2.s2`,
+`fel-boot-stock.sh`. Stage one rarely changes (`fw-write.sh dram/stage1.fw`).
+Rollback to the single-image layout: `fw-write.sh dram/app.fw` (must fit 60 KB).
+
 ## Other board notes (bench unit, opened 2026-11-24)
 
 - SoC: **F133-B** (eLQFP128). Bluetooth: Bluetrum "AB" LQFP48 with a 26 MHz

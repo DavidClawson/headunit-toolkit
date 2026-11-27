@@ -3,7 +3,7 @@ CROSS ?= riscv64-elf-
 CFLAGS = -march=rv64gc_zicsr -mabi=lp64d -mcmodel=medany -O2 -ffreestanding \
          -fno-builtin -nostdlib -nostartfiles -Wall -Wextra -fno-tree-loop-distribute-patterns
 LDFLAGS = -T dram.ld -Wl,--build-id=none -Wl,--no-warn-rwx-segments
-PROGS = memtest clock dsi1 dsi2 dsion dsi3 dsi4 ui touch touchrate vsync app hang radio twiscan bdtest bbscan bttest calltest pbtest spitest bltest ledtest audtest dmatest mixtest
+PROGS = stage1 memtest clock dsi1 dsi2 dsion dsi3 dsi4 ui touch touchrate vsync app hang radio twiscan bdtest bbscan bttest calltest pbtest spitest bltest ledtest audtest dmatest mixtest adctest
 
 all: $(PROGS:=.bin)
 
@@ -14,8 +14,16 @@ COMMON = start.S lib.c dsi.c display.c gfx.c font8x16.c font16x32.c home.c twi.c
 
 %.bin: %.elf
 	$(CROSS)objcopy -O binary $< $@
-	@echo "$@: $$(wc -c < $@) bytes at 0x40000000"
+	@echo "$@: $$(wc -c < $@) bytes at $$($(CROSS)nm $< | sed -n 's/^0*\([0-9a-f]*\) T _start$$/0x\1/p')"
 
 clean:
-	rm -f *.elf *.bin
+	rm -f *.elf *.bin *.s2
 .PHONY: all clean
+
+# stage two: the full firmware linked at 0x40100000, for NOR S2_ADDR (see ../bootsel/fwboot.h)
+app2.elf: app.c $(COMMON) stage2.ld
+	$(CROSS)gcc $(CFLAGS) -ffunction-sections -fdata-sections -T stage2.ld -Wl,--build-id=none -Wl,--no-warn-rwx-segments -Wl,--gc-sections -o $@ $(COMMON) app.c
+app2.s2: app2.bin
+	./mkfw.py --stage2 $< -o $@
+stage1.fw: stage1.bin
+	./mkfw.py $< -o $@
