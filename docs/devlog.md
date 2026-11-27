@@ -551,3 +551,8 @@ a couple of minutes later (heartbeat unanswered); the unit came back up in ours.
   RCA at the noise floor, not even switching clicks. Stock mutes only through
   BD3702 volume (reg `0x20` = `0xFF`), so the dead output is past the BD3702 or
   the radio audio doesn't come in the way we think.
+- **Warm hand-off attempt:** importing Config.ini in stock reboots the unit, but
+  the app mutes at the "success" toast first (recording: strong signal, then
+  digital zero), so it can't show whether the path survives an F133 reset. Our
+  FEL runs sit at the iMic's analog noise floor instead, so the RCA stage may be
+  live with nothing feeding it.
