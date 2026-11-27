@@ -15,6 +15,8 @@ the first-contact kit; the background is in
 | `pwm-backlight.sh` | Hardware PWM dimming on PWM7 (PD22, 50 kHz from 24 MHz / 480). `init`, `duty <0-100>`, `ramp [n]`, `status`. **Works** (2026-11-26). |
 | `i2c.c` / `i2c.py` | I2C over FEL: SRAM payload + host tool. `scan`, `read`, `write`, `gt911-id`, `gt911-touch`. **Works** (2026-11-26). |
 | `edges.c` / `uart_sniff.py` | Logic-analyser-style UART listener: timestamps every edge on an RX pin (mcycle, 0.2 µs polls), then estimates baud and decodes 8N1 on the Mac. `calibrate`, `listen uart1|uart4`. |
+| `felrun.py`, `dram/` | DRAM programs: `felrun.py dram/<prog>.bin` sets up RAM (`xfel ddr f133`, once per power-up), loads at `0x40000000`, runs, prints the program's log. `dram/lib.h` has MMIO, `udelay`, `ticks()`, `logf()`. Programs: `memtest`, `clock`. |
+| `clip-wait.sh` | Polls the SOIC clip until flashrom sees the chip, then chimes. For reseating a fiddly clip. |
 | `payload.ld` | Linker script for C payloads (entry at `0x40000`, request block at `0x40F00`). |
 | `Makefile` | `make` builds `probe.bin` (load address `0x40000`). |
 
@@ -164,9 +166,25 @@ was already at `0x5d` at power-on.
   `0x1400BFF8` hung FEL (needed a power-cycle). Probe unknown regions from
   your own payload instead.
 
+## DRAM and the DRAM program kit (2026-11-26)
+
+- `xfel ddr f133` uses exactly the board's `[dram_para]` (all 24 fields match).
+  **`memtest`: 62 MB, data bus + address + two patterns, 0 errors, ~4.5 s.**
+- **xfel's DRAM init also raises the CPU to 1008 MHz** (PLL_CPU N = 42; 408 MHz
+  before). `lib.c` `cpu_hz()` reads the PLL instead of assuming.
+- **Don't time with `mcycle`.** During long DRAM-heavy runs its upper 32 bits
+  jumped forward by whole multiples of 2^32 (5, 6, 7 × 2^32 seen), while the low
+  word and the 24 MHz timer stayed correct. `dram/lib.c` uses TIMER1 (24 MHz,
+  free-running) for `ticks()`/`udelay()`; `dram/clock.c` is the regression test.
+  An earlier clock test that spun on `mcycle` hung FEL (power-cycle needed).
+- No serial console on this board, so FEL is the console: a program writes its
+  log to `0x43FF0000` and `felrun.py` prints it after the program returns.
+
 ## Memory used
 
 xfel's own helper code lives at `0x20000`–`0x32000` (DDR init, SPI) and
 `0x45000` (read32/write32, used by `hexdump`). The probe sits at
 `0x40000`–`0x40140`, clear of both. DRAM (`0x40000000`, 64 MB on the F133) is
-only usable after `xfel ddr f133`.
+only usable after `xfel ddr f133`. DRAM programs: code from `0x40000000`, stack
+`0x43F00000`–`0x43FF0000`, log `0x43FF0000`. `felrun.py` keeps a "DRAM ready"
+marker at SRAM `0x44F80`.

@@ -170,7 +170,13 @@ anything conductive, and refit the heatsink before real use.
 Once a unit boots normally, read it once more (`after.bin` above) and keep that
 file. It's the one to write back after any future experiment.
 
-## The debug UART (located, not yet wired)
+## The debug UART (located, but apparently not connected)
+
+> **Update 2026-11-26:** on the bench unit, PB6/PB7 (legs 17/18) seem to have
+> **no traces leaving them**, and continuity probing found nothing on the board
+> that connects to either pin. The vendor likely never routed the debug console
+> on this board revision. The notes below stay for reference; for a console, use
+> FEL instead (`tools/fel/felrun.py` reads a log buffer back over USB).
 
 The kernel console is on **UART3**: `boot0`'s header and `[uart_para]` in
 `sys_config_nor.fex` agree on **TX = PB6, RX = PB7, 576000 baud 8N1** (not
@@ -313,6 +319,9 @@ What this gives:
    hardware watchdog, and boots the experimental image. A hang resets the unit,
    the selector sees the flag and boots stock. FEL and then the clip stay as the
    backstops.
+3a. **DRAM over FEL: done** (2026-11-26). `xfel ddr f133` with the board's own
+   parameters, 62 MB memtest clean, CPU at 1008 MHz afterwards; C programs run
+   from DRAM via `tools/fel/felrun.py`.
 4. **Clean stock → new firmware tests** once the above is proven on the bench.
 
 ## Other board notes (bench unit, opened 2026-11-24)

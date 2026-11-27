@@ -6,6 +6,25 @@ it's reverse-engineering facts and test results from a unit we own.
 
 ---
 
+## 2026-11-26 (evening) — DRAM up over FEL; a C program kit with FEL as the console
+
+- **Debug UART is a dead end on this board:** PB6/PB7 (legs 17/18) appear to
+  have no traces, and continuity probing found nothing connected to them.
+- **DRAM:** `xfel ddr f133` (its parameter table matches `sys_config`
+  `[dram_para]` field for field). `tools/fel/dram/memtest`: 62 MB, data bus,
+  address, 0x55/0xAA patterns, **0 errors** in ~4.5 s, repeated across power-ups.
+- **CPU clock after DRAM init: 1008 MHz** (xfel's payload raises PLL_CPU from 408).
+- **`mcycle` is unreliable for timing here:** its upper word jumped by 5–7 × 2^32
+  during DRAM-heavy runs (decoded from impossible timings: 34.3 s and 25.8 s
+  reported for 4.5 s runs, and one 0.87 s loop reading as 26.6e9 cycles). A test
+  that spun on it hung FEL once. Timing now uses the 24 MHz TIMER1, which agreed
+  with the host clock to within rounding every time.
+- **Kit:** `tools/fel/dram/` (start code that returns cleanly to FEL, `logf`,
+  `udelay`, `ticks`) and `tools/fel/felrun.py` (DRAM init once per power-up,
+  load, run, print the log). `clip-wait.sh` chimes when a reseated clip makes contact.
+
+---
+
 ## 2026-11-26 — FEL over the front USB port works; clip-free recovery verified
 
 - **Why:** hand-soldering to the 0.4 mm UART legs was doing more harm than good
