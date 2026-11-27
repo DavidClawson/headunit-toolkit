@@ -136,19 +136,37 @@ static const uint8_t bd_init[][2] = {
 
 static void bd(uint8_t reg, uint8_t v) { twi_write(2, BD, reg, 1, &v, 1); }
 
+int snd_vol = 25, snd_muted;
+static int snd_ready;
+
 void sound_init(void)
 {
+	if (snd_ready) return;
+	snd_ready = 1;
 	twi_init(2);
 	bd(0x20, 0xFF);                                       /* muted while setting up */
 	for (unsigned i = 0; i < sizeof bd_init / sizeof bd_init[0]; i++)
 		if (bd_init[i][0] != 0x20) bd(bd_init[i][0], bd_init[i][1]);
-	bd(0x05, 0x0B);                                       /* input: radio */
+	bd(0x05, SOUND_IN_RADIO);
+	sound_apply();
+}
+
+void sound_input(uint8_t in) { sound_init(); bd(0x05, in); }
+
+void sound_step(int dir)
+{
+	snd_vol += dir;
+	if (snd_vol < 1) snd_vol = 1;
+	if (snd_vol > SOUND_MAX) snd_vol = SOUND_MAX;
+	snd_muted = 0;
+	sound_apply();
 }
 
 /* BD3702 volume register 0x20: 0x80 = 0 dB, each step above = -1 dB, 0xFF = mute.
    Level 30 = 0 dB, each level down = -2 dB. */
-void sound_volume(int level)
+void sound_apply(void)
 {
+	int level = snd_muted ? 0 : snd_vol;
 	if (level <= 0) { bd(0x20, 0xFF); return; }
 	if (level > SOUND_MAX) level = SOUND_MAX;
 	bd(0x20, (uint8_t)(0x80 + 2 * (SOUND_MAX - level)));

@@ -639,3 +639,23 @@ program into the boot firmware (`tools/fel/dram/tuner.c`, `radio_ui.c`):
 - **Still RAM-only:** favorites and volume reset on power-up. Next: a settings
   sector (the last 4 KB of our slot), then names via an on-screen keyboard.
 - **Size:** 39 KB of the 64 KB slot.
+
+**Bluetooth audio and key LEDs (2026-11-27).** `tools/fel/dram/bttest.c`:
+- **Audio:** BD3702 input `0x0A` plays the phone's Bluetooth audio from the
+  rear RCA.
+- **Controls:** play, pause and next work as raw `AT#` commands on UART4.
+- **Track info:** the module reports it (`MI` title/artist/album/length, `MP`
+  position every second).
+- **The module is a LITIANTAI WB020,** not the AB5301 as first guessed. Details
+  in [mcu-protocol.md](mcu-protocol.md).
+- **Key LEDs:** set to a fixed colour with `B0 [FE 00 00 05 m]`, which ends the
+  colour cycling.
+- **Now Playing page** (`bt.c`, `bt_ui.c`), tile 2:
+  - title, artist and album;
+  - a progress bar with times;
+  - prev, play/pause and next;
+  - the knob does volume and its push does play/pause.
+  - Opening the Radio or Bluetooth page switches the BD3702 input, and the
+    volume is shared (`sound_*` in `tuner.c`).
+  - At boot the firmware sets the key LEDs to white.
+  - Titles are folded to ASCII for our fonts (é → e, other characters → `?`).

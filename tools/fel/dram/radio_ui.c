@@ -38,7 +38,6 @@ static struct {
 	struct { uint16_t f; char name[24]; } fav[NFAV];
 	struct { uint16_t f; uint8_t rssi; } sta[NSTA];
 	int nsta;
-	int vol, muted;
 	int knob;
 	uint32_t ring_until;    /* ring visible (and knob mode held) until; 0 = hidden */
 	int scanning;
@@ -47,7 +46,7 @@ static struct {
 	int pop; uint16_t pop_f; int pop_i;
 	char note[48];
 	uint32_t note_until;
-} r = { .vol = 25 };
+} r;
 
 /* ---------- geometry ---------- */
 
@@ -105,7 +104,6 @@ static void say(const char *a, uint16_t f, const char *b)
 
 const char *radio_note(void) { return millis() < r.note_until ? r.note : 0; }
 
-static void apply_volume(void) { sound_volume(r.muted ? 0 : r.vol); }
 
 static int fav_index(uint16_t f)
 {
@@ -115,10 +113,9 @@ static int fav_index(uint16_t f)
 
 void radio_open(void)
 {
+	sound_input(SOUND_IN_RADIO);                 /* every time the page opens */
 	if (r.opened) return;
 	r.opened = 1;
-	sound_init();
-	apply_volume();
 	r.init_err = tuner_init();
 	logf("radio: tuner_init %d, Si47%02u fw %c.%c rev %c\n", r.init_err, tuner.part,
 	     tuner.fw_major, tuner.fw_minor, tuner.rev);
@@ -256,10 +253,10 @@ void radio_draw(int pressed)
 	}
 	button(B_VOLDN, "Vol -", 0, mp == B_VOLDN, BTN);
 	button(B_VOLUP, "Vol +", 0, mp == B_VOLUP, BTN);
-	button(B_MUTE, r.muted ? "Unmute" : "Mute", 0, mp == B_MUTE, r.muted ? 0xc92a2a : BTN);
+	button(B_MUTE, snd_muted ? "Unmute" : "Mute", 0, mp == B_MUTE, snd_muted ? 0xc92a2a : BTN);
 	for (int i = 0; i < SOUND_MAX; i++)
 		gfx_rrect(252 + i * 20, 595, 14, 40, 4,
-		          i < r.vol ? (r.muted ? 0x5c6b8a : 0xc8d4ec) : 0x2a3f6a);
+		          i < snd_vol ? (snd_muted ? 0x5c6b8a : 0xc8d4ec) : 0x2a3f6a);
 
 	if (r.list_open) draw_list(r.pop == POP_NONE ? pressed : -1);
 	if (r.pop != POP_NONE) draw_popup(pressed);
@@ -315,9 +312,9 @@ int radio_press(int id)
 	case B_UP: tuner_tune((uint16_t)(tuner.freq + FM_STEP)); break;
 	case B_SCAN: if (r.scanning) scan_finish(); else scan_start(); break;
 	case B_LIST: r.list_open = 1; break;
-	case B_VOLDN: if (r.vol > 1) r.vol--; r.muted = 0; apply_volume(); break;
-	case B_VOLUP: if (r.vol < SOUND_MAX) r.vol++; r.muted = 0; apply_volume(); break;
-	case B_MUTE: r.muted = !r.muted; apply_volume(); break;
+	case B_VOLDN: sound_step(-1); break;
+	case B_VOLUP: sound_step(1); break;
+	case B_MUTE: snd_muted = !snd_muted; sound_apply(); break;
 	default:
 		if (id >= B_F1 && id <= B_F6) {
 			int i = id - B_F1;
@@ -358,10 +355,7 @@ int radio_knob(int dir)
 	if (r.init_err) return 0;
 	r.ring_until = millis() + KNOB_IDLE_MS;
 	if (r.knob == KNOB_VOLUME) {
-		r.vol += dir;
-		if (r.vol < 1) r.vol = 1;
-		if (r.vol > SOUND_MAX) r.vol = SOUND_MAX;
-		r.muted = 0; apply_volume();
+		sound_step(dir);
 		return 1;
 	}
 	if (r.scanning) return 1;

@@ -37,3 +37,18 @@ int mcu_key(const mcu_frame *f)
 {
 	return (f->cmd == 0xB2 && f->len == 6) ? f->data[1] : -1;
 }
+
+void mcu_send(uint8_t cmd, const void *data, unsigned len)
+{
+	const uint8_t *d = data;
+	uint8_t x = 0x80 ^ cmd ^ (uint8_t)len;
+	uart_putc(1, 0x02); uart_putc(1, 0x80); uart_putc(1, cmd); uart_putc(1, (uint8_t)len);
+	for (unsigned i = 0; i < len; i++) { uart_putc(1, d[i]); x ^= d[i]; }
+	uart_putc(1, x);
+}
+
+void mcu_key_led(uint8_t mode)
+{
+	uint8_t d[5] = { 0xFE, 0, 0, mode == LED_OFF ? 0 : 5, mode };
+	mcu_send(0xB0, d, 5);
+}
