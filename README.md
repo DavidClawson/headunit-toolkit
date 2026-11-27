@@ -42,6 +42,46 @@ publishing anything built with it.
 > confirmed on hardware. Keep your original firmware; see
 > [Safety](#safety-in-one-line) before flashing anything.
 
+## 🆕 Open firmware: it boots (bench unit, Nov 2026)
+
+Beyond modding the stock firmware, there's now a **clean-sheet firmware** for
+this hardware, written from scratch (no vendor code) and **booting from the
+unit's own flash**:
+
+- **Display:** MIPI-DSI panel (JD9365, 720×1280 portrait, mounted landscape)
+  brought up from bare registers: clocks, D-PHY, DSI, TCON, the DE2 mixer,
+  double-buffered page flips on vblank.
+- **Drawing:** a home screen with tiles, rounded shapes, gradients and bitmap
+  fonts, rendered on the device.
+- **Input:** GT911 touch over I2C, and the rotary knob/keys via the front-panel
+  MCU (Bluetrum AB5301) over UART, all in one event loop.
+- **Boot selector:** a small patch to boot0 loads our image from NOR
+  `0x120000`, checks it, and starts it under a watchdog.
+
+It's built to be **hard to brick**, and every fallback has been tested on real
+hardware:
+
+| If… | then… |
+|---|---|
+| you want stock back | hold the status bar for 3 s: the unit boots stock once |
+| our image is corrupt | the selector boots stock instead |
+| our firmware hangs at start-up | an 8 s watchdog resets the unit into stock |
+| it freezes later | the watchdog restarts it back into ours |
+| anything worse | every boot opens a 3 s USB FEL window first, so it can be reflashed from a PC |
+
+**Not working yet (help wanted!):** audio. The stock app drives an Si4730 tuner
+that doesn't answer on this board, yet stock FM radio plays fine, so where the
+radio audio comes from is an open question. See the
+[open issues](https://github.com/DavidClawson/headunit-toolkit/issues).
+
+**Getting started:** the first FEL entry needs the case open and a SOIC-8 clip on
+the SPI NOR (once). After that, everything runs over the front USB port. Start
+with [`tools/fel/README.md`](tools/fel/README.md),
+[`docs/display.md`](docs/display.md),
+[`docs/boot-and-recovery.md`](docs/boot-and-recovery.md) and
+[`docs/mcu-protocol.md`](docs/mcu-protocol.md). **Use a bench unit, not the
+one in your car.**
+
 ## What it does today
 
 - **Parse / unpack** the IMAGEWTY image and list its sub-partitions.
@@ -98,6 +138,7 @@ user-facing menu text / translations — all **flash-and-go over USB**, no case
 opening, CarPlay/Android Auto preserved.
 
 **In progress / exploring (iterating in public):**
+- **Open firmware** (see above): audio and the radio are next; help wanted.
 - Browser configurator — adding vendor-ZIP in/out and a menu-relabel &
   translation editor (the newly-validated lane).
 - Shareable engineer **config profiles** (`factory1.bin`) — decoding the format.
@@ -119,7 +160,10 @@ this is exactly the stage where real-hardware data is most valuable.
 | [`docs/format-datav1.md`](docs/format-datav1.md) | compiled UI screen-layout format |
 | [`docs/hardware.md`](docs/hardware.md) | SoC, OS, tuner, CarPlay/AA findings |
 | [`docs/factory-menu.md`](docs/factory-menu.md) | factory/engineer access codes + full menu map |
-| [`docs/boot-and-recovery.md`](docs/boot-and-recovery.md) | SD-boot, FEL recovery, a planned boot selector |
+| [`docs/boot-and-recovery.md`](docs/boot-and-recovery.md) | FEL recovery, the boot0 FEL window + boot selector (built and tested), NOR map |
+| [`docs/display.md`](docs/display.md) | open firmware: display, drawing, touch, vblank, event loop |
+| [`docs/mcu-protocol.md`](docs/mcu-protocol.md) | front-panel MCU (AB5301) UART protocol, keys, keep-alive, radio facade |
+| [`tools/fel/README.md`](tools/fel/README.md) | FEL tools: running programs from RAM, flashing, I2C/UART probes |
 | [`docs/modding-workflow.md`](docs/modding-workflow.md) | versioned variants, bench unit, safety |
 | [`docs/lua-host.md`](docs/lua-host.md) | north-star design: an SD-card Lua scripting host (open app ecosystem) |
 | [`docs/reference/control-inventory.md`](docs/reference/control-inventory.md) | UI control cross-reference (placed vs referenced; dormant features) |
@@ -160,7 +204,8 @@ recovery doc.
   analysis, the loadable-module (`.mod`) format and injection path, the
   Bluetooth/OBD-II findings, and the Lua-host design. These come from static
   analysis of the stock image and will be confirmed or corrected on the bench.
-  The u-boot SD boot selector is designed but not yet built.
+- **✅ Open firmware on the bench unit:** boots from NOR through a boot0
+  selector with tested fallbacks; display, touch and knob work. Audio not yet.
 
 Contributions, corrections, and especially **"I tried this on my unit and…"**
 reports are very welcome — this is exactly the stage where real-hardware data is
