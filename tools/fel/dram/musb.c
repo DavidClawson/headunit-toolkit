@@ -230,12 +230,14 @@ static void ep0_setup(const uint8_t *r)
 	wr16(CSR0, CSR0_SVDRXPKTRDY | CSR0_SENDSTALL);
 }
 
+int musb_disconnect_ms = 500;   /* how long musb_start stays disconnected before connecting */
+
 int musb_start(const struct musb_class *c)
 {
 	cls = c;
 	config = 0;
 	wr8(POWER, rd8(POWER) & ~POWER_SOFTCONN);               /* the host sees a disconnect */
-	udelay(500000);
+	udelay(musb_disconnect_ms * 1000);
 	wr8(VEND0, 0);                                           /* PIO, no DMA */
 	wr16(INTRTXE, 0xFFFF); wr16(INTRRXE, 0xFFFE); wr8(INTRUSBE, USB_RESET | USB_SUSPEND | USB_RESUME | USB_DISCON);
 	wr8(INTRUSB, rd8(INTRUSB)); wr16(INTRTX, rd16(INTRTX)); wr16(INTRRX, rd16(INTRRX));

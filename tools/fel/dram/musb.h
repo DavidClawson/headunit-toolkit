@@ -33,6 +33,7 @@ struct musb_class {
 };
 
 int  musb_start(const struct musb_class *c);    /* disconnect, set up, connect; 0 ok */
+extern int musb_disconnect_ms;                  /* musb_start's disconnected time (default 500) */
 void musb_poll(void);                           /* run often: bus events and EP0 */
 int  musb_configured(void);
 int  musb_high_speed(void);

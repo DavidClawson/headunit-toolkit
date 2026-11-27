@@ -878,3 +878,43 @@ cable for the device.
   phones also look for charger signalling.
 - **Next:** the role-switch request and the device-side interfaces stock
   presents afterwards.
+
+**The wired-CarPlay role switch works, and the iPhone answers iAP2
+(2026-11-27).** `carplaytest.c` does what stock does (`docs/carplay-usb.md`):
+1. USB0 is host, with PD18 on for USB-A's 5 V. It reads the iPhone's device
+   descriptor and sends `SET_CONFIGURATION 1`.
+2. It sends `C0 53` (the phone answers `01 00 00 00`), then `40 51` (wValue 0).
+3. The phone drops off the bus about 66 ms later and comes back as the **host**.
+4. USB0 then presents stock's gadget: `0525:A4A1`, iAP `FF/F0/00` "iAP
+   Interface", and CDC-NCM.
+
+On the bench (iPhone, iOS current as of today):
+- 1 bus reset and 17 SETUPs;
+- **configured at high speed**;
+- the phone reads strings 4–6;
+- it answers our iAP2 detect packet (`FF 55 02 00 EE 10`) with the same 6 bytes.
+
+There was no pop-up, and the phone charges throughout. NCM stays down (the
+phone never selects alt 1 on interface 2): iOS only brings it up inside a
+CarPlay session, which needs iAP2 link set-up and MFi authentication.
+
+**The host-to-device switch needs a full controller reset.** Clearing
+`DEVCTL`, forcing ID high and reconnecting leaves the MUSB in a state where no
+host sees it, even after 8 reconnects with gaps of up to 2 s. Adding stock's
+PHY steps (`0x410` VBUSVLDEXT/SIDDQ, `0x420` OTG select) doesn't help. What
+works: pulse the USBOTG0 reset in the CCU (`USB_BGR` `0x02001A8C` bit 24),
+then set ISCR, the PHY and the device registers from scratch.
+
+Found with `carplaymac.bin` (`-DMACTEST`), a self-test against the Mac that
+needs no iPhone:
+1. 3 s in host mode;
+2. each variant for 8 s;
+3. only variant 2 enumerates on the Mac (as "NCM Gadget", high speed).
+
+Stock gets the same effect by unloading its EHCI host driver and initialising
+the UDC.
+
+**Next:** the iAP2 link layer (SYN/ACK packets on the iAP endpoints), then
+identification. Authentication needs the MFi chip on `/dev/twi2` (0x10),
+which is the point where `carplay.mod` (or our own iAP2 code) has to take
+over.
