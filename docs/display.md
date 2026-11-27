@@ -109,9 +109,14 @@ fill, outline, rounded rectangle, vertical gradient, text. Fonts are Spleen
 Measured (CPU 1008 MHz, D-cache off): full-screen clear 5.5 ms, the whole home
 screen (gradient, four tiles, ~200 glyphs) 44 ms.
 
-Open: `display_flip()` returns at once (`DBUFF` reads 0 straight after the
-write), so it doesn't yet wait for vblank. Fine for still screens; animation
-will want a real vblank wait (TCON `GINT0` line/vblank flags) to avoid tearing.
+**Vblank:** `display_vblank_wait()` polls TCON0 `TRI_FINISH` (`GINT0` bit 11,
+write 0 to clear), set when the TCON finishes sending a frame to the DSI
+controller; Linux's DSI path uses the same flag. `display_flip()` sets the new
+address and the mixer latch (`DBUFF`, which reads back 0 at once) and waits for
+it, after which the old buffer is free. Measured period **17,083 µs = 58.54 Hz**
+(70 MHz / (908 × 1317)). `vsync.c`: bars sweeping with no sync tear (vertical
+cuts, since the panel scans screen columns left to right); double-buffered with
+the flip on vblank they're smooth, 58.6 fps.
 
 ## Touch
 

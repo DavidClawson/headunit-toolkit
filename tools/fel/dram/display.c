@@ -96,12 +96,23 @@ int display_up(uint32_t fb)
 	return display_running() ? 0 : -1;
 }
 
+/* TCON0 TRI_FINISH (GINT0 bit 11): set when the TCON finishes sending a frame
+   to the DSI controller, i.e. the start of vertical blanking. Linux's DSI path
+   uses the same flag. Write 0 to clear. */
+int display_vblank_wait(void)
+{
+	wr32(TCON + 0x04, rd32(TCON + 0x04) & ~(1u << 11));
+	uint32_t t0 = ticks();
+	while (!(rd32(TCON + 0x04) & (1u << 11)))
+		if (ticks() - t0 > 50000u * TICKS_PER_US) return -1;
+	return 0;
+}
+
 void display_flip(uint32_t fb)
 {
 	wr32(UI_CH + 0x10, fb);
-	wr32(MIXER + 0x8, 1);                            /* latch at the next vblank */
-	uint32_t t0 = ticks();
-	while ((rd32(MIXER + 0x8) & 1) && ticks() - t0 < 24000u * 50) ;
+	wr32(MIXER + 0x8, 1);              /* mixer latches the new address at its next frame */
+	display_vblank_wait();             /* after this the old buffer is free to draw into */
 }
 
 uint32_t display_fb(void) { return rd32(UI_CH + 0x10); }

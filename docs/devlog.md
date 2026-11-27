@@ -475,3 +475,8 @@ its reset sequence and reports in landscape at 1024 × 600, so mapping to the
 1280 × 720 screen is a plain scale. `touch.c` lights the tile under the finger
 and leaves a dot trail: the dots land right under the finger. First
 interactive screen from our own code.
+
+**Vblank wait:** TCON0 `TRI_FINISH` gives the frame end in DSI mode, every
+17,083 µs (58.54 Hz, exactly the panel timing). With `display_flip()` waiting
+on it, double-buffered animation runs at 58.6 fps with no tearing; the same
+bars drawn straight into the visible buffer show cuts.
