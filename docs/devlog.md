@@ -54,8 +54,20 @@ it's reverse-engineering facts and test results from a unit we own.
   PD19. The reset getter is `0xe91ae27c` (config + `0xB9C`); all five tuner
   drivers pulse it low ~20 ticks then high, so it's **active-low**.
 - **Released PB5 from FEL** (low pulse, then high): TWI1 still empty, with both
-  bus lines idle high. The tuner is likely unpowered in FEL, or not fitted on the
-  bench board (the 10-hole `ANT` row is a tuner-module footprint).
+  bus lines idle high.
+- **Why: the radio isn't an I2C tuner on this build.** Photos of the bench board
+  show the 10-hole `ANT` tuner-module footprint **empty**, and the chip by the
+  antenna can is a **Bluetrum ("AB") `CHXC14B5B`**, LQFP48, 26 MHz crystal
+  (`YL260`). `Config.ini` has **`bArmRadio=1`** (the vendor calls the companion
+  chip "ARM": `[ARM] armVolGain`, `armChannelA`), and `init.axf` contains
+  `AB5301_`. So the radio most likely runs on the Bluetrum (Bluetrum audio parts
+  commonly integrate FM), controlled over a UART, and the TWI1 tuner path and
+  PB5 reset are only used on builds with a tuner module. The radio works on the
+  owner's other, identical unit.
+- **UARTs from `Config.ini` + `sys_config`:** `mcuSerialName=/dev/uart1` (PG12 TX /
+  PG13 RX, func 7; `mcuChip=2`), `btSerialName=/dev/uart4` (PB02 TX / PB03 RX,
+  func 7; AT commands like `AT#VN030606`). Which of these carries the radio
+  commands isn't confirmed yet.
 - **Next:** tuner reset pin, then panel init over MIPI-DSI,
   then a boot selector with watchdog fallback. Plan in
   [boot-and-recovery.md](boot-and-recovery.md#plan-clean-sheet-firmware-with-fallback).

@@ -91,6 +91,12 @@ are physically (F133 pins 80/79), and the SPI-clip recovery procedure, are in
 The app numbers GPIOs as `port × 100 + pin` with A = 0 (so `318` = PD18). See
 [devlog](devlog.md) for the trace.
 
+**But this build has no I2C tuner:** the `ANT` module footprint is empty and
+`Config.ini` sets `bArmRadio=1`, so FM most likely runs on the Bluetrum
+`CHXC14B5B` companion chip (custom marking; the app references `AB5301_`),
+reached over a UART (`mcuSerialName=/dev/uart1` on PG12/PG13, or
+`btSerialName=/dev/uart4` on PB02/PB03). The I2C tuner drivers are for other builds.
+
 The app has RDS fully compiled in — PS (station name), **RT (RadioText =
 song/artist)**, PTY, TA/TP, AF, EON — and drivers for many RDS-capable tuner
 chips: **TEF6686 / TEF665x**, **Si47xx** (4730/4732/4745/4754/4755/4702),
