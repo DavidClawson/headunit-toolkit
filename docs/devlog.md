@@ -918,3 +918,19 @@ the UDC.
 identification. Authentication needs the MFi chip on `/dev/twi2` (0x10),
 which is the point where `carplay.mod` (or our own iAP2 code) has to take
 over.
+
+**iAP2 link up: the iPhone asks for our certificate (2026-11-27).**
+`carplaytest.c` now runs a minimal iAP2 link layer on the iAP endpoints:
+1. it sends the detect packet;
+2. it sends a SYN with version 1, 4 outstanding packets, max packet 4096,
+   retransmit 1500 ms, cumulative ACK 73 ms, 30 retries, 3 cumulative ACKs,
+   and one session (id 10, control, version 1);
+3. it ACKs the phone's SYN+ACK and every data packet.
+
+The phone answers with SYN+ACK (`C0`) carrying `01 7F FFFF 05DC 0049 1E 03
+0A 00 01`: our timers and session accepted, its own window 127 and max
+packet 65535. One SYN was enough, with no RSTs and no checksum errors.
+
+Its first control message is **`AA00` RequestAuthenticationCertificate**
+(6 bytes, no parameters). Answering it needs the MFi coprocessor's
+certificate (the chip on `twi2`, address 0x10).

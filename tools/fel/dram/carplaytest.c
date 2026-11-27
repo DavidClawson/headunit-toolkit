@@ -228,12 +228,11 @@ static const struct musb_ep g_eps[] = {
 	{ 1, 1, 2, 512 }, { 1, 0, 2, 512 }, { 4, 1, 3, 64 }, { 2, 1, 2, 512 }, { 2, 0, 2, 512 },
 };
 
-static int g_config, ncm_on, notify_pending, detect_sent;
-static uint32_t cfg_at, n_iap_in, n_iap_pkts, n_frames, n_ntb_bad, n_class;
-static uint8_t iap_first[24];
-static int iap_first_n;
+static int g_config, ncm_on, notify_pending;
+static uint32_t cfg_at, n_iap_in, n_frames, n_ntb_bad, n_class;
 static uint16_t types[4];
 
+static void memmove_(uint8_t *d, const uint8_t *s, int n) { for (int i = 0; i < n; i++) d[i] = s[i]; }
 static void put16(uint8_t *p, uint16_t v) { p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); }
 static void put32(uint8_t *p, uint32_t v) { put16(p, (uint16_t)v); put16(p + 2, (uint16_t)(v >> 16)); }
 static uint16_t get16(const uint8_t *p) { return (uint16_t)(p[0] | p[1] << 8); }
@@ -257,7 +256,8 @@ static int g_setup(const uint8_t r[8], uint8_t *buf, const uint8_t *out, int out
 	}
 	return -1;
 }
-static void g_configured(int c) { g_config = c; if (c) cfg_at = millis(); else { ncm_on = 0; detect_sent = 0; } }
+static void iap2_reset(void);
+static void g_configured(int c) { g_config = c; if (c) cfg_at = millis(); else ncm_on = 0; iap2_reset(); }
 static void g_set_alt(int iface, int a) { if (iface == 2) { ncm_on = a == 1; notify_pending = ncm_on; } }
 
 static const struct musb_class gadget = {
@@ -294,6 +294,121 @@ static void become_device(void)
 	devctl_dev = rd8(DEVCTL);
 }
 
+/* ---- iAP2 link layer (just enough to open a link) ----
+   Packet: FF 5A, length (BE, whole packet), control, seq, ack, session, header
+   checksum, then payload + payload checksum (each checksum makes its bytes sum to 0).
+   Control bits: SYN 80, ACK 40, EAK 20, RST 10, SLP 08. We send the detect packet,
+   then a SYN offering one control session (id 10); the phone answers SYN+ACK; we ACK
+   it and every data packet after, and show the control-message IDs it sends. */
+#define IAP_SESS 10
+static int ls;                            /* 0 idle, 1 detect sent, 2 detect answered, 3 SYN sent, 4 linked */
+static uint8_t my_seq = 0x2B, their_seq;
+static int syn_tries, got_detect, n_rst, n_msgs, n_data, n_badsum;
+static uint32_t ls_at;
+static uint8_t their_syn[24]; static int their_syn_n; static uint8_t their_ctl;
+static uint16_t msg_ids[6]; static uint16_t msg_len[6];
+static uint8_t last_data[16]; static int last_data_n;
+static uint8_t irx[4096 + 512]; static int irx_n;
+
+static uint8_t sum8(const uint8_t *p, int n) { uint8_t s = 0; while (n--) s += *p++; return (uint8_t)-s; }
+
+static void link_send(uint8_t ctl, uint8_t sess, const uint8_t *pl, int n)
+{
+	static uint8_t o[64];
+	int len = 9 + (n ? n + 1 : 0);
+	o[0] = 0xFF; o[1] = 0x5A; o[2] = (uint8_t)(len >> 8); o[3] = (uint8_t)len;
+	o[4] = ctl; o[5] = my_seq; o[6] = (ctl & 0x40) ? their_seq : 0; o[7] = sess;
+	o[8] = sum8(o, 8);
+	if (n) { memcpy(o + 9, pl, n); o[9 + n] = sum8(pl, n); }
+	musb_send(1, o, len, 512);
+}
+
+static void iap2_reset(void) { ls = 0; irx_n = 0; syn_tries = 0; }
+
+static void send_syn(void)
+{
+	static const uint8_t syn[] = {
+		0x01,             /* link version 1 */
+		0x04,             /* max outstanding packets */
+		0x10, 0x00,       /* max received packet length 4096 */
+		0x05, 0xDC,       /* retransmission timeout 1500 ms */
+		0x00, 0x49,       /* cumulative ACK timeout 73 ms */
+		30,               /* max retransmissions */
+		3,                /* max cumulative ACKs */
+		IAP_SESS, 0, 1,   /* session 10: control, version 1 */
+	};
+	link_send(0x80, 0, syn, sizeof syn);
+	syn_tries++; ls = 3; ls_at = millis();
+}
+
+static void on_link_packet(const uint8_t *p, int len)
+{
+	uint8_t ctl = p[4], seq = p[5], sess = p[7];
+	int pn = len > 9 ? len - 10 : 0;                  /* payload bytes (without its checksum) */
+	if (pn && sum8(p + 9, pn) != p[9 + pn]) { n_badsum++; return; }
+	if (ctl & 0x10) { n_rst++; ls = 2; return; }      /* RST: start over with a new SYN */
+	if (ctl & 0x80) {                                  /* the phone's SYN (+ACK): its parameters */
+		their_ctl = ctl; their_seq = seq;
+		their_syn_n = pn < (int)sizeof their_syn ? pn : (int)sizeof their_syn;
+		memcpy(their_syn, p + 9, their_syn_n);
+		link_send(0x40, 0, 0, 0);                      /* ACK */
+		ls = 4;
+		return;
+	}
+	if (pn) {                                          /* data: ACK it (again, if a retransmit) */
+		int fresh = seq != their_seq;
+		their_seq = seq;
+		link_send(0x40, 0, 0, 0);
+		if (!fresh) return;
+		n_data++;
+		last_data_n = pn < 16 ? pn : 16;
+		memcpy(last_data, p + 9, last_data_n);
+		const uint8_t *m = p + 9;
+		if (sess == IAP_SESS && pn >= 6 && m[0] == 0x40 && m[1] == 0x40) {
+			for (int i = 5; i > 0; i--) { msg_ids[i] = msg_ids[i - 1]; msg_len[i] = msg_len[i - 1]; }
+			msg_ids[0] = (uint16_t)(m[4] << 8 | m[5]); msg_len[0] = (uint16_t)(m[2] << 8 | m[3]);
+			n_msgs++;
+		}
+	}
+}
+
+static void iap2_poll(void)
+{
+	static uint8_t b[512];
+	if (musb_rx_ready(1)) {
+		int k = musb_read(1, b, sizeof b);
+		n_iap_in += (uint32_t)k;
+		if (irx_n + k > (int)sizeof irx) irx_n = 0;
+		memcpy(irx + irx_n, b, k); irx_n += k;
+	}
+	/* parse whatever complete packets the stream holds */
+	for (;;) {
+		int i = 0;
+		while (i < irx_n && irx[i] != 0xFF) i++;
+		if (i) { memmove_(irx, irx + i, irx_n - i); irx_n -= i; }
+		if (irx_n < 6) break;
+		if (irx[1] == 0x55 && irx[2] == 0x02 && irx[3] == 0x00 && irx[4] == 0xEE && irx[5] == 0x10) {   /* detect reply */
+			got_detect = 1; if (ls < 2) ls = 2;
+			memmove_(irx, irx + 6, irx_n - 6); irx_n -= 6; continue;
+		}
+		if (irx[1] != 0x5A) { memmove_(irx, irx + 1, irx_n - 1); irx_n--; continue; }
+		if (irx_n < 9) break;
+		int len = irx[2] << 8 | irx[3];
+		if (len < 9 || len > 4096 || sum8(irx, 8) != irx[8]) { n_badsum++; memmove_(irx, irx + 1, irx_n - 1); irx_n--; continue; }
+		if (irx_n < len) break;
+		on_link_packet(irx, len);
+		memmove_(irx, irx + len, irx_n - len); irx_n -= len;
+	}
+	/* drive the handshake */
+	if (ls == 0 && millis() - cfg_at > 100) {
+		static const uint8_t detect[6] = { 0xFF, 0x55, 0x02, 0x00, 0xEE, 0x10 };
+		if (musb_send(1, detect, 6, 512) == 0) { ls = 1; ls_at = millis(); }
+	}
+	if (ls == 1 && millis() - ls_at > 1000) ls = 0;      /* no answer: detect again */
+	if (ls == 2) send_syn();
+	if (ls == 3 && millis() - ls_at > 1500 && syn_tries < 6) send_syn();
+}
+
 static void device_poll(void)
 {
 	musb_poll();
@@ -305,16 +420,7 @@ static void device_poll(void)
 		musb_send(4, sp, 16, 64);
 		musb_send(4, nc, 8, 64);
 	}
-	if (g_config && !detect_sent && millis() - cfg_at > 100) {
-		static const uint8_t detect[6] = { 0xFF, 0x55, 0x02, 0x00, 0xEE, 0x10 };   /* iAP2 detect */
-		if (musb_write(1, detect, 6) == 6) detect_sent = 1;
-	}
-	static uint8_t b[512];
-	if (g_config && musb_rx_ready(1)) {                  /* iAP bulk OUT */
-		int k = musb_read(1, b, sizeof b);
-		n_iap_pkts++; n_iap_in += (uint32_t)k;
-		for (int i = 0; i < k && iap_first_n < (int)sizeof iap_first; i++) iap_first[iap_first_n++] = b[i];
-	}
+	if (g_config) iap2_poll();
 	static uint8_t ntb[2048 + 512];
 	static int nl;
 	if (ncm_on && musb_rx_ready(2)) {                    /* NCM bulk OUT: count frames and their types */
@@ -380,19 +486,33 @@ static void status(void)
 	}
 	if (sw_line[0]) gfx_text(30, 330, sw_line, &font16x32, 1, 0xffffff);
 	if (phase == 1) {
-		p = str_cat(s, "iAP: detect "); p = str_cat(p, detect_sent ? "sent" : "not sent");
-		p = str_cat(p, "  in "); p = str_u(p, n_iap_in); p = str_cat(p, " bytes: ");
-		for (int i = 0; i < iap_first_n && i < 16; i++) { p = hexn(p, iap_first[i], 2); *p++ = ' '; *p = 0; }
-		gfx_text(30, 380, s, &font16x32, 1, n_iap_in ? 0x40ff60 : 0xffffff);
+		static const char *const lsn[] = { "idle", "detect sent", "detect answered", "SYN sent", "LINKED" };
+		p = str_cat(s, "iAP2: "); p = str_cat(p, lsn[ls]);
+		p = str_cat(p, "  detect "); p = str_cat(p, got_detect ? "yes" : "no");
+		p = str_cat(p, "  SYN x"); p = str_u(p, (uint32_t)syn_tries);
+		p = str_cat(p, "  in "); p = str_u(p, n_iap_in);
+		p = str_cat(p, "  data "); p = str_u(p, (uint32_t)n_data);
+		p = str_cat(p, "  rst "); p = str_u(p, (uint32_t)n_rst); p = str_cat(p, "  bad "); p = str_u(p, (uint32_t)n_badsum);
+		gfx_text(30, 370, s, &font16x32, 1, ls == 4 ? 0x40ff60 : 0xffffff);
+		if (their_syn_n) {
+			p = str_cat(s, "phone SYN "); p = hexn(p, their_ctl, 2); p = str_cat(p, ": ");
+			for (int i = 0; i < their_syn_n && i < 16; i++) { p = hexn(p, their_syn[i], 2); *p++ = ' '; *p = 0; }
+			gfx_text(30, 404, s, &font16x32, 1, 0xa0ffa0);
+		}
+		if (n_msgs) {
+			p = str_cat(s, "messages "); p = str_u(p, (uint32_t)n_msgs); p = str_cat(p, ":");
+			for (int i = 0; i < 6 && i < n_msgs; i++) { *p++ = ' '; p = hexn(p, msg_ids[i], 4); *p++ = '/'; p = str_u(p, msg_len[i]); }
+			gfx_text(30, 438, s, &font16x32, 1, 0x40ff60);
+		}
 		p = str_cat(s, "NCM: "); p = str_cat(p, ncm_on ? "up" : "down"); p = str_cat(p, "  frames "); p = str_u(p, n_frames);
 		p = str_cat(p, "  bad "); p = str_u(p, n_ntb_bad); p = str_cat(p, "  types ");
 		for (int i = 0; i < 4; i++) { p = hexn(p, types[i], 4); *p++ = ' '; *p = 0; }
-		gfx_text(30, 420, s, &font16x32, 1, n_frames ? 0x40ff60 : 0xffffff);
+		gfx_text(30, 472, s, &font16x32, 1, n_frames ? 0x40ff60 : 0xffffff);
 		uint8_t rq[6][8];                                /* the phone's recent requests to us */
 		int n = musb_recent(rq, 6);
 		for (int i = 0; i < n; i++) {
 			p = s; for (int j = 0; j < 8; j++) { p = hexn(p, rq[i][j], 2); *p++ = ' '; *p = 0; }
-			gfx_text(30 + (i / 3) * 480, 470 + (i % 3) * 34, s, &font16x32, 1, 0xa0c0ff);
+			gfx_text(30 + (i / 3) * 480, 516 + (i % 3) * 30, s, &font16x32, 1, 0xa0c0ff);
 		}
 	}
 	dcache_flush();
