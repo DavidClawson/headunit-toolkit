@@ -517,10 +517,9 @@ firmware. Hangs at startup still fall back to stock.
 `[codec]` with `codec_used = 0` (the F133 has no port H; the internal codec is
 unused). The stock app's configurable GPIO keys (all listed in `init.axf`:
 `radioPowerGpio`, `antPowerGpio`, `subwoofGpio1/2`, `frontPowerGpio`, …) have no
-amp or mute pin, and the app mutes through `CSystemSetup_MuteOn`. The unit's
-`Config.ini` uses GPIO numbers 318/319 (`usb0PowerGpio`, `frontAuxSwitchGpio`),
-above the F133's range, which points to pins on the AB5301 MCU (`mcuChip=2`).
-Likely conclusion: the MCU owns amp standby and mute, so controlling them
-means sending MCU commands (we are listen-only so far). Next evidence: the amp
+amp or mute pin, and the app mutes through `CSystemSetup_MuteOn`. The unit's `Config.ini` pins (app numbering port×100 + pin: 318 = PD18 `usb0PowerGpio`,
+319 = PD19 `frontAuxSwitchGpio`) aren't amp pins either. Likely conclusion: the
+amp's standby/mute is driven by the MCU or by the sound processor's output stage,
+not by a pin the app names. Next evidence: the amp
 chip's marking, and the mute frame stock sends the MCU (from `init.axf`
   around `CSystemSetup_MuteOn`; we can't watch stock's UART TX live).
