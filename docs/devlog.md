@@ -442,3 +442,18 @@ growing the directory. That's the next toolkit feature, along with teaching
 Bench boot (procedure in [hostmod/README.md](../hostmod/README.md)). Success =
 `HELLO.TXT` on the stick. Then: confirm the drive letter, try loading from the stick
 directly (`insmod f:\x.mod`), and start on the Lua VM (milestone 3).
+
+## 2026-11-26: first image on the LCD from our own code
+
+Display stages 1–3 (`docs/display.md`) in one evening, ported from the
+mainline Linux sun6i DSI / D-PHY (A100 variant) / sun4i TCON drivers into
+DRAM programs run with `felrun.py`:
+
+1. **DSI command path:** the JD9365 answers DCS reads with bus turnaround on
+   the first try (power mode `0x08`, pixel format `0x70`). Its ID registers
+   read zero.
+2. **Panel init:** the 212-entry `[mipi_reg]` list from `sys_config` goes
+   through as DCS short writes; the panel leaves sleep (`0x08` → `0x18`).
+3. **TCON pattern over DSI video:** colour bars, stable. No display engine yet.
+
+Next: stage 4, a DE2 mixer UI layer reading a framebuffer in DRAM.
