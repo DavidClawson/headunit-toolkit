@@ -43,3 +43,14 @@ static inline uint32_t mhcr(void)
 {
 	uint32_t v; __asm__ volatile("csrr %0, 0x7c1" : "=r"(v)); return v;
 }
+
+/* tiny string builders: append to p, keep it NUL-terminated, return the new end */
+static inline char *str_u(char *p, unsigned v)
+{
+	char t[12]; int n = 0;
+	do t[n++] = (char)('0' + v % 10); while (v /= 10);
+	while (n) *p++ = t[--n];
+	*p = 0;
+	return p;
+}
+static inline char *str_cat(char *p, const char *s) { while (*s) *p++ = *s++; *p = 0; return p; }

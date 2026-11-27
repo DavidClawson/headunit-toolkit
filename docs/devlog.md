@@ -469,3 +469,9 @@ And then **drawing on the device**: `display.c` (pipeline bring-up, double
 buffering) and `gfx.c` (landscape coordinates, rounded tiles, gradients,
 Spleen bitmap fonts). A mock home screen draws in 44 ms on the F133, against
 8 s to push one frame over FEL.
+
+Then **touch**: `twi.c` + `gt911.c` in the DRAM kit. The GT911 answers after
+its reset sequence and reports in landscape at 1024 × 600, so mapping to the
+1280 × 720 screen is a plain scale. `touch.c` lights the tile under the finger
+and leaves a dot trail: the dots land right under the finger. First
+interactive screen from our own code.

@@ -3,13 +3,13 @@ CROSS ?= riscv64-elf-
 CFLAGS = -march=rv64gc_zicsr -mabi=lp64d -mcmodel=medany -O2 -ffreestanding \
          -fno-builtin -nostdlib -nostartfiles -Wall -Wextra -fno-tree-loop-distribute-patterns
 LDFLAGS = -T dram.ld -Wl,--build-id=none -Wl,--no-warn-rwx-segments
-PROGS = memtest clock dsi1 dsi2 dsion dsi3 dsi4 ui
+PROGS = memtest clock dsi1 dsi2 dsion dsi3 dsi4 ui touch
 
 all: $(PROGS:=.bin)
 
 .PRECIOUS: %.elf
-COMMON = start.S lib.c dsi.c display.c gfx.c font8x16.c font16x32.c
-%.elf: %.c $(COMMON) lib.h dsi.h display.h gfx.h panel_init.h dram.ld
+COMMON = start.S lib.c dsi.c display.c gfx.c font8x16.c font16x32.c home.c twi.c gt911.c
+%.elf: %.c $(COMMON) lib.h dsi.h display.h gfx.h home.h twi.h gt911.h panel_init.h dram.ld
 	$(CROSS)gcc $(CFLAGS) -ffunction-sections -fdata-sections $(LDFLAGS) -Wl,--gc-sections -o $@ $(COMMON) $<
 
 %.bin: %.elf

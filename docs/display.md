@@ -112,3 +112,20 @@ screen (gradient, four tiles, ~200 glyphs) 44 ms.
 Open: `display_flip()` returns at once (`DBUFF` reads 0 straight after the
 write), so it doesn't yet wait for vblank. Fine for still screens; animation
 will want a real vblank wait (TCON `GINT0` line/vblank flags) to avoid tearing.
+
+## Touch
+
+`tools/fel/dram/twi.c` (I2C master, from the SRAM `i2c.c`, waits bounded by
+`ticks()`) and `gt911.c` (reset selecting `0x5d`, ID/resolution read, point
+polling) on TWI3 (PG10/PG11), INT PG07, RESET PG08. The GT911 reports in its
+own configured resolution, **1024 × 600, already in landscape screen
+orientation**, so screen = raw × (1280/1024, 720/600): no flips or swaps.
+Verified with `touch.c`: tiles light under the finger, dots land under it.
+ID `911`, firmware `0x1060`. Open: only 74 reporting frames in the 30 s run
+(56 with a touch), well below the GT911's usual ~100 Hz while touched; worth
+checking (config refresh rate, or how the poll loop clears the status) before
+anything needs smooth drags.
+
+The earlier "touch doesn't report in caught-FEL sessions" (via `buttons.py`)
+wasn't chased; from the DRAM program, in a caught-FEL session, it reports
+straight away.
