@@ -11,5 +11,14 @@ void audio_beep(unsigned hz, unsigned ms, int level);   /* level 0..256; soft ed
 void audio_click(void);         /* short UI tick */
 int  audio_busy(void);          /* any voice still sounding */
 
+/* PCM voices (game sound effects): unsigned 8-bit mono at any rate, resampled to 48 kHz.
+   vol 0..127, sep 0 (left) .. 128 (centre) .. 254 (right), as Doom uses them.
+   The data must stay valid while it plays. */
+#define AUDIO_PCM_VOICES 8
+void audio_pcm_start(int ch, const uint8_t *data, uint32_t len, uint32_t rate, int vol, int sep);
+void audio_pcm_params(int ch, int vol, int sep);
+void audio_pcm_stop(int ch);
+int  audio_pcm_playing(int ch);
+
 typedef struct { uint32_t underruns, frames, max_gap_ms; } audio_stats_t;
 extern audio_stats_t audio_stats;

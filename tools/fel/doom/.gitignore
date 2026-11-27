@@ -1,0 +1,5 @@
+doomgeneric/
+doom1.wad
+build/
+*.bin
+*.elf

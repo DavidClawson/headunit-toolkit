@@ -763,3 +763,28 @@ program into the boot firmware (`tools/fel/dram/tuner.c`, `radio_ui.c`):
   no call; the app's logical source routing is unchanged. On the radio, taps are
   silent and the radio keeps playing. Settings has a "Touch sounds" toggle
   (saved). 53.8 KB of 60.
+
+**Doom runs on the head unit (2026-11-27).** `tools/fel/doom/`:
+- **Source:** doomgeneric (GPLv2) at a pinned commit, plus the shareware
+  `DOOM1.WAD` (v1.9, SHA-1 checked). Both are fetched by `fetch.sh` and not
+  committed.
+- **Our pieces:**
+  - **`libc.c`:** a bump allocator (32 MB above the framebuffers), strings,
+    `printf` to our log, memory-backed files (`doom1.wad` from
+    `felrun --load`, writes go to a sink), and `exit()` back to FEL via setjmp.
+  - **`dg_f133.c`:** a 320×200 → 960×600 blit into the rotated buffer.
+    Controls: touch joystick, Use/Fire margins, knob turn/fire, yes/no prompts.
+  - **`snd_f133.c`:** DMX sound lumps through `audio.c`'s new PCM voices: 8
+    voices, 8-bit, resampled to 48 kHz, stereo-panned. Music is a silent stub
+    for now.
+- **Speed:** 2–3 fps at first, because **the D-cache is off under FEL**
+  (`mhcr 0x109`). Doom sets `mhcr = 0x11ff` (D-cache, write-allocate, branch
+  prediction); our code already flushes before the display or DMA reads. That
+  gave 19.5 fps. Then 8-byte `memcpy`/`memset` in `lib.c` and a direct
+  3-column blit gave **29.2 fps**: two panel refreshes per frame, near Doom's
+  35-tic ceiling.
+- **Also:** `start.S` turns the FPU on, and `felrun.py --load ADDR:FILE`.
+- **Run:**
+  `tools/fel/felrun.py doom/doom.bin --load 0x43800000:doom/doom1.wad --timeout 3600`
+- **To consider:** turning the D-cache on in the head-unit app too. The UI
+  draws with the cache off today (a full home screen took 44 ms).

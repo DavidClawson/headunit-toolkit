@@ -84,5 +84,34 @@ void logf(const char *f, ...)
 	va_end(ap);
 }
 
-void *memset(void *d, int c, size_t n) { uint8_t *p = d; while (n--) *p++ = (uint8_t)c; return d; }
-void *memcpy(void *d, const void *s, size_t n) { uint8_t *p = d; const uint8_t *q = s; while (n--) *p++ = *q++; return d; }
+/* 8 bytes at a time once both pointers are 8-aligned (Doom and the blits lean on these) */
+void *memset(void *d, int c, size_t n)
+{
+	uint8_t *p = d;
+	while (n && ((uintptr_t)p & 7)) { *p++ = (uint8_t)c; n--; }
+	uint64_t w = 0x0101010101010101ull * (uint8_t)c;
+	for (; n >= 32; n -= 32, p += 32) {
+		((uint64_t *)p)[0] = w; ((uint64_t *)p)[1] = w; ((uint64_t *)p)[2] = w; ((uint64_t *)p)[3] = w;
+	}
+	for (; n >= 8; n -= 8, p += 8) *(uint64_t *)p = w;
+	while (n--) *p++ = (uint8_t)c;
+	return d;
+}
+void *memcpy(void *d, const void *s, size_t n)
+{
+	uint8_t *p = d; const uint8_t *q = s;
+	if ((((uintptr_t)p ^ (uintptr_t)q) & 7) == 0) {
+		while (n && ((uintptr_t)p & 7)) { *p++ = *q++; n--; }
+		for (; n >= 32; n -= 32, p += 32, q += 32) {
+			uint64_t a = ((const uint64_t *)q)[0], b = ((const uint64_t *)q)[1];
+			uint64_t c = ((const uint64_t *)q)[2], e = ((const uint64_t *)q)[3];
+			((uint64_t *)p)[0] = a; ((uint64_t *)p)[1] = b; ((uint64_t *)p)[2] = c; ((uint64_t *)p)[3] = e;
+		}
+		for (; n >= 8; n -= 8, p += 8, q += 8) *(uint64_t *)p = *(const uint64_t *)q;
+	} else if ((((uintptr_t)p ^ (uintptr_t)q) & 3) == 0) {
+		while (n && ((uintptr_t)p & 3)) { *p++ = *q++; n--; }
+		for (; n >= 4; n -= 4, p += 4, q += 4) *(uint32_t *)p = *(const uint32_t *)q;
+	}
+	while (n--) *p++ = *q++;
+	return d;
+}
