@@ -86,6 +86,11 @@ are physically (F133 pins 80/79), and the SPI-clip recovery procedure, are in
 
 ## FM tuner & RDS
 
+**Bus and reset (bench-checked over FEL, 2026-11-26):** the tuner is on TWI1
+(PG14 SCL / PB04 SDA); its reset is `radioResetGpio=105` = **PB5**, active-low.
+The app numbers GPIOs as `port × 100 + pin` with A = 0 (so `318` = PD18). See
+[devlog](devlog.md) for the trace.
+
 The app has RDS fully compiled in — PS (station name), **RT (RadioText =
 song/artist)**, PTY, TA/TP, AF, EON — and drivers for many RDS-capable tuner
 chips: **TEF6686 / TEF665x**, **Si47xx** (4730/4732/4745/4754/4755/4702),

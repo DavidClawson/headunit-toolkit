@@ -45,9 +45,17 @@ it's reverse-engineering facts and test results from a unit we own.
   First guesses from addresses alone (QN8035 tuner, PT2312) were wrong, and an
   early read hit the wrong bus (tool defaulted to bus 3; `--bus` now required).
 - **Tuner is on TWI1** (`radioI2cName=/dev/twi1`, PG14/PB04) and doesn't answer
-  in FEL. `radioResetGpio=105` would be PD9 under the usual numbering, but PD9 is
-  a MIPI-DSI lane pin, so it wasn't driven until the numbering is confirmed.
-  Also `bHaveRds=0` in this unit's `Config.ini`.
+  in FEL. Also `bHaveRds=0` in this unit's `Config.ini`.
+- **App GPIO numbering traced** (`init.axf`): `SetGpioData` (`0xe91a4a54`) →
+  `0xe9193016` splits the number as **`n / 100` = port, `n % 100` = pin**, and
+  `0xe9192e74` fills Allwinner's `user_gpio_set_t` with `port = n/100 + 1`
+  (1 = A). So `radioResetGpio=105` = **PB5**, not PD9 (a DSI lane, which is why
+  it wasn't guessed at). `usb0PowerGpio=318` = PD18, `frontAuxSwitchGpio=319` =
+  PD19. The reset getter is `0xe91ae27c` (config + `0xB9C`); all five tuner
+  drivers pulse it low ~20 ticks then high, so it's **active-low**.
+- **Released PB5 from FEL** (low pulse, then high): TWI1 still empty, with both
+  bus lines idle high. The tuner is likely unpowered in FEL, or not fitted on the
+  bench board (the 10-hole `ANT` row is a tuner-module footprint).
 - **Next:** tuner reset pin, then panel init over MIPI-DSI,
   then a boot selector with watchdog fallback. Plan in
   [boot-and-recovery.md](boot-and-recovery.md#plan-clean-sheet-firmware-with-fallback).

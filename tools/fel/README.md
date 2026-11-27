@@ -132,7 +132,7 @@ per `xfel exec` (request block at `0x40F00`). A bus scan takes about 0.5 s.
 
 | Bus | Pins | Device | How it was identified |
 |---|---|---|---|
-| TWI1 | PG14 SCL / PB04 SDA (func 4) | radio tuner (none answer in FEL) | `Config.ini` `radioI2cName=/dev/twi1`. Probably held in reset (`radioResetGpio=105`) or unpowered. |
+| TWI1 | PG14 SCL / PB04 SDA (func 4) | radio tuner (none answer in FEL) | `Config.ini` `radioI2cName=/dev/twi1`. Reset `radioResetGpio=105` = **PB5**, active-low (app numbering is port×100 + pin, A = 0). Still silent with PB5 high: unpowered in FEL or not fitted. |
 | TWI2 | PE12 SCL / PE13 SDA (func 2) | `0x10`: **Apple MFi auth coprocessor** | `carplayI2cName=/dev/twi2`; `0x10` is the MFi chip's standard address; registers read all zero (not a tuner). |
 | TWI2 | | `0x40`: **sound processor, likely ROHM BD3702** | `audioI2cName=/dev/twi2`; app has a `CAudioBD3702` driver; write-only (refuses reads), as BD37xx parts are. |
 | TWI2 | | `0x44`: **Techpoint TP2850** camera decoder | Chip ID `0x28 0x50` at `0xFE/0xFF`; the kernel's `tp2804` driver (AHD/CVBS → BT656). |
