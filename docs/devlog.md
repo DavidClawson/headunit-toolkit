@@ -556,3 +556,13 @@ a couple of minutes later (heartbeat unanswered); the unit came back up in ours.
   digital zero), so it can't show whether the path survives an F133 reset. Our
   FEL runs sit at the iMic's analog noise floor instead, so the RCA stage may be
   live with nothing feeding it.
+- **MCU-radio frames:** `B3 [01]`, `B3 [00]` (the app's MCU-radio init) and
+  `B0 [60 00 00 hi lo]` (set frequency, tried in 10 kHz and 100 kHz units) get no
+  reply and no sound. The MCU acks `A0`, `A4`, `A7`, `B7`, `BA`, `C3`; it
+  doesn't ack `B0` or `B3`. RCA still at the iMic's floor for 100 s.
+- **Open for next time:** where stock's FM actually comes from. Leads: (1) board
+  photos around the antenna input/shield can for a tuner IC; (2) sniff stock with
+  the Pico: TWI1 (does the Si4730 traffic get ACKs?), TWI2 (what stock writes to
+  the BD3702), UART1 TX (every frame stock sends the MCU); (3) the debug UART log
+  (`bPrintLog=1`, PB6 at 576000) would answer it directly, but needs the case
+  open and a safer connection than hand-soldering.

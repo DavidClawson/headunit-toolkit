@@ -118,6 +118,9 @@ int main(void)
 	logf(" A0\n"); mcu_send(0xA0, 0, 0);   mcu_listen(1000);
 	logf(" B7 02\n"); mcu_send(0xB7, b7, 1); mcu_listen(300);
 	logf(" C3\n"); mcu_send(0xC3, 0, 0);   mcu_listen(500);
+	static const uint8_t b3on[1] = { 0x01 }, b3off[1] = { 0x00 };
+	logf(" B3 01 (MCU-radio init, sent only when bArmRadio=0)\n"); mcu_send(0xB3, b3on, 1); mcu_listen(500);
+	logf(" B3 00\n"); mcu_send(0xB3, b3off, 1); mcu_listen(500);
 	logf(" BA\n"); mcu_send(0xBA, 0, 0);   mcu_listen(300);
 	logf(" A7 0F 00\n"); mcu_send(0xA7, a7f, 2); mcu_listen(300);
 	logf(" B0 CE 01 (host up)\n"); mcu_send(0xB0, ce, 5); mcu_listen(300);
@@ -176,10 +179,16 @@ sound:
 	v = 0x8A;         bad += twi_write(2, BD, 0x20, 1, &v, 1) != 0;
 	logf("  %u writes, %u failed; input 0x0B (radio), volume -10 dB\n",
 	     (unsigned)(sizeof bd_init / sizeof bd_init[0]) + 2, bad);
-	logf("5. radio input for 20 s (answering keep-alives), then inputs 0..15, 2 s each\n");
-	mcu_listen(20000);
+	logf("5. MCU tune: B0 [60 00 00 hi lo], 10 kHz units (101.1 = 27 7E), 12 s\n");
+	static const uint8_t t1[5] = { 0x60, 0x00, 0x00, 0x27, 0x7E }, t2[5] = { 0x60, 0x00, 0x00, 0x03, 0xF3 };
+	mcu_send(0xB0, t1, 5); mcu_listen(12000);
+	logf("   100 kHz units (101.1 = 03 F3), 12 s\n");
+	mcu_send(0xB0, t2, 5); mcu_listen(12000);
+	logf("   radio source again, then 10 kHz tune again, 8 s\n");
+	mcu_send(0xA7, src, 2); mcu_listen(500);
+	mcu_send(0xB0, t1, 5); mcu_listen(8000);
 	logf("  keep-alives answered so far: %u\n", acks);
-	for (uint8_t in = 0; in < 16; in++) { twi_write(2, BD, 0x05, 1, &in, 1); mcu_listen(2000); }
+	for (uint8_t in = 0; in < 16; in++) { twi_write(2, BD, 0x05, 1, &in, 1); mcu_listen(1500); }
 	v = 0x0B; twi_write(2, BD, 0x05, 1, &v, 1);
 	logf("  keep-alives answered: %u\n", acks);
 	logf("done\n");
