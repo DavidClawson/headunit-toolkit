@@ -918,3 +918,94 @@ the UDC.
 identification. Authentication needs the MFi chip on `/dev/twi2` (0x10),
 which is the point where `carplay.mod` (or our own iAP2 code) has to take
 over.
+
+**iAP2 link up: the iPhone asks for our certificate (2026-11-27).**
+`carplaytest.c` now runs a minimal iAP2 link layer on the iAP endpoints:
+1. it sends the detect packet;
+2. it sends a SYN with version 1, 4 outstanding packets, max packet 4096,
+   retransmit 1500 ms, cumulative ACK 73 ms, 30 retries, 3 cumulative ACKs,
+   and one session (id 10, control, version 1);
+3. it ACKs the phone's SYN+ACK and every data packet.
+
+The phone answers with SYN+ACK (`C0`) carrying `01 7F FFFF 05DC 0049 1E 03
+0A 00 01`: our timers and session accepted, its own window 127 and max
+packet 65535. One SYN was enough, with no RSTs and no checksum errors.
+
+Its first control message is **`AA00` RequestAuthenticationCertificate**
+(6 bytes, no parameters). Answering it needs the MFi coprocessor's
+certificate (the chip on `twi2`, address 0x10).
+
+**iAP2 authentication succeeds with the unit's own MFi chip (2026-11-27).**
+The coprocessor on TWI2 (`0x10`) is an MFi 3.0 part: device version `0x07`,
+protocol 3.0, and a 607-byte certificate.
+
+The chip needs this access pattern:
+1. Write the register address, then STOP.
+2. Keep retrying **only the read** until the chip ACKs. It NACKs while busy;
+   the certificate-length read takes a few ms.
+3. Don't re-send the pointer on each retry. That restarts the chip's work, so
+   the earlier code never got past register `0x30`.
+
+Signing uses the challenge at `0x21` and start bit `0x10` = 1. It then polls
+`0x10` until status (bits 4–6) = 1, and reads the length at `0x11` and the
+signature at `0x12`. It takes about 390 ms. `twi.c` gained `twi_timeout_us`
+for long clock-stretches.
+
+On the bench, `carplaytest.c` answers each iPhone message as follows:
+
+| Phone sends | We reply |
+|---|---|
+| `AA00` | `AA01` with the certificate (param 0) |
+| `AA02` (32-byte challenge) | `AA03` with the 64-byte signature (param 0) |
+
+The phone then sends **`AA05` AuthenticationSucceeded**, followed by **`1D00`
+StartIdentification**.
+
+The certificate is sent only to the phone and is never logged.
+
+**Next:** IdentificationInformation (`1D01`), which declares what the accessory
+supports. CarPlay over USB needs its own component.
+
+**Identification accepted, and the iPhone brings up the CarPlay network link
+(2026-11-27).** With stock's IdentificationInformation (our own name), the
+phone answers `1D02` IdentificationAccepted, then sends `4E0B`
+DeviceTimeUpdate and `AE01` PowerUpdate (after our `AE00`/`AE03`).
+
+It then starts on NCM with **`SET_CRC_MODE`** (`21 8A`, wValue 0). We advertise
+CRC support (bmNetworkCapabilities `0x11`, as stock does), so this request
+must be accepted: stalling it leaves the link down. With that fixed, the
+phone:
+- sets the packet filter (`21 43`);
+- selects alt 1 on interface 2 (**NCM up**);
+- sends IPv4 and IPv6 frames: 94 in the first ~20 s with 0 bad NTBs,
+  including DHCP requests (UDP 67) and mDNS (UDP 5353).
+
+**Next:** answer on that link. Stock uses a static 192.168.31.160 plus IPv6
+link-local, advertises `_airplay._tcp` and connects to the phone's
+`_carplay-ctrl._tcp` (`docs/carplay-iap2.md` section 4). That's the start of
+the CarPlay session proper.
+
+**Where wired CarPlay stands (2026-11-27).** Every step below runs in our
+firmware (`tools/fel/dram/carplaytest.c`), on the bench unit, with a current
+iPhone:
+
+| Step | Status | Notes |
+|---|---|---|
+| USB-A host mode + 5 V | done | USB0, PD18 |
+| Role switch (`C0 53`, `40 51`) | done | phone drops off after ~70 ms |
+| Back as a device | done | needs a USBOTG0 CCU reset |
+| Stock's iAP + NCM gadget | done | configured at high speed |
+| iAP2 link (detect, SYN, ACK) | done | |
+| Authentication | done | MFi 3.0 chip on TWI2, `AA05` |
+| Identification | done | stock's layout, `1D02` accepted |
+| Power and time messages | done | `AE00`/`AE03` out, `4E0B` and `AE01` in |
+| NCM link | done | phone selects alt 1; DHCP and mDNS traffic |
+| Our side of the link | next | IPv6 ND, address, mDNS `_airplay._tcp` |
+| CarPlay control connection | todo | to the phone's `_carplay-ctrl._tcp` |
+| AirPlay/CarPlay session | todo | pairing, MFi-SAP, H.264 video, audio |
+
+The last two rows are where hosting stock's `carplay.mod` (the chosen
+direction, `docs/carplay-host.md`) or a large amount of our own code comes
+in. Everything above them is now ours and understood. It is also the part
+the module expects its host to provide: the USB gadget, the role switch, and
+the iAP2 and NCM transport (`MIoctrl` 13).

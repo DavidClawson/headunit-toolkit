@@ -14,13 +14,14 @@
 #define CNTR_A_ACK  (1u << 2)
 
 static uint32_t base;
+unsigned twi_timeout_us = 2000;   /* per byte; a device may stretch the clock longer (the MFi chip) */
 
 static int step(uint32_t bits)
 {
 	wr32(base + 0x0C, CNTR_BUS_EN | CNTR_IFLG | bits);
 	uint32_t t0 = ticks();
 	while (!(rd32(base + 0x0C) & CNTR_IFLG))
-		if (ticks() - t0 > 2000 * TICKS_PER_US) return -1;
+		if (ticks() - t0 > twi_timeout_us * TICKS_PER_US) return -1;
 	return (int)rd32(base + 0x10);
 }
 
@@ -28,7 +29,7 @@ static void stop(void)
 {
 	wr32(base + 0x0C, CNTR_BUS_EN | CNTR_IFLG | CNTR_M_STP);
 	uint32_t t0 = ticks();
-	while ((rd32(base + 0x0C) & CNTR_M_STP) && ticks() - t0 < 2000 * TICKS_PER_US) ;
+	while ((rd32(base + 0x0C) & CNTR_M_STP) && ticks() - t0 < twi_timeout_us * TICKS_PER_US) ;
 }
 
 static int start(uint8_t a8)

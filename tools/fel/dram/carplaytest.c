@@ -17,6 +17,7 @@
 #include "musb.h"
 #include "display.h"
 #include "gfx.h"
+#include "twi.h"
 
 #define USB0      0x04100000u
 #define FIFO0     (USB0 + 0x00)
@@ -228,12 +229,12 @@ static const struct musb_ep g_eps[] = {
 	{ 1, 1, 2, 512 }, { 1, 0, 2, 512 }, { 4, 1, 3, 64 }, { 2, 1, 2, 512 }, { 2, 0, 2, 512 },
 };
 
-static int g_config, ncm_on, notify_pending, detect_sent;
-static uint32_t cfg_at, n_iap_in, n_iap_pkts, n_frames, n_ntb_bad, n_class;
-static uint8_t iap_first[24];
-static int iap_first_n;
-static uint16_t types[4];
+static int g_config, ncm_on, notify_pending;
+static uint32_t cfg_at, n_iap_in, n_frames, n_ntb_bad, n_class;
+static uint16_t types[4], ports[4];
+static uint32_t n_mdns, n_icmp6;
 
+static void memmove_(uint8_t *d, const uint8_t *s, int n) { for (int i = 0; i < n; i++) d[i] = s[i]; }
 static void put16(uint8_t *p, uint16_t v) { p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); }
 static void put32(uint8_t *p, uint32_t v) { put16(p, (uint16_t)v); put16(p + 2, (uint16_t)(v >> 16)); }
 static uint16_t get16(const uint8_t *p) { return (uint16_t)(p[0] | p[1] << 8); }
@@ -252,12 +253,15 @@ static int g_setup(const uint8_t r[8], uint8_t *buf, const uint8_t *out, int out
 		return 28;
 	case 0x85: put32(buf, 2048); return 4;
 	case 0x86: case 0x43: case 0x84: case 0x88: return 0;
+	case 0x8A: return 0;                                 /* SET_CRC_MODE (we advertise it, as stock does): no CRC */
+	case 0x89: put16(buf, 0); return 2;                  /* GET_CRC_MODE */
 	case 0x83: put16(buf, 0); return 2;
 	case 0x87: put16(buf, 1514); return 2;
 	}
 	return -1;
 }
-static void g_configured(int c) { g_config = c; if (c) cfg_at = millis(); else { ncm_on = 0; detect_sent = 0; } }
+static void iap2_reset(void);
+static void g_configured(int c) { g_config = c; if (c) cfg_at = millis(); else ncm_on = 0; iap2_reset(); }
 static void g_set_alt(int iface, int a) { if (iface == 2) { ncm_on = a == 1; notify_pending = ncm_on; } }
 
 static const struct musb_class gadget = {
@@ -294,6 +298,322 @@ static void become_device(void)
 	devctl_dev = rd8(DEVCTL);
 }
 
+/* ---- Apple MFi 3.0 coprocessor (TWI2, 0x10): certificate and challenge signing ----
+   The chip wants: write the register address, STOP, then a separate read; it NACKs
+   while busy, so retry. Registers: 0x10 control/status, 0x11 signature length,
+   0x12 signature, 0x20 challenge length, 0x21 challenge, 0x30 certificate length,
+   0x31.. certificate (128 bytes per register). The certificate is unique to the
+   unit: it goes only to the phone and is never shown or logged. */
+#define MFI 0x10
+static uint8_t mfi_ver, mfi_proto;
+static int cert_len, mfi_err, mfi_stage, mfi_len_read;
+static uint8_t cert[1024];
+static int sig_len, sig_ms, sig_status = -1;
+static uint8_t sig[128];
+
+static int mfi_last;                      /* last I2C error (TWI_*) */
+static int mfi_rd(uint8_t reg, uint8_t *b, int n)
+{
+	for (int w = 0; w < 10; w++) {                       /* set the register pointer (the chip NACKs while busy) */
+		if ((mfi_last = twi_write(2, MFI, reg, 1, 0, 0)) != TWI_OK) { udelay(2000); continue; }
+		for (int i = 0; i < 100; i++) {                  /* then retry only the read, up to ~100 ms */
+			udelay(1000);
+			if ((mfi_last = twi_read(2, MFI, 0, 0, b, (unsigned)n)) == TWI_OK) return 0;
+		}
+	}
+	mfi_err++;
+	return -1;
+}
+static int mfi_wr(uint8_t reg, const uint8_t *b, int n)
+{
+	for (int i = 0; i < 40; i++) {
+		if (twi_write(2, MFI, reg, 1, b, (unsigned)n) == TWI_OK) return 0;
+		udelay(2000);
+	}
+	mfi_err++;
+	return -1;
+}
+static void mfi_init(void)
+{
+	uint8_t b[2];
+	twi_init(2);
+	twi_timeout_us = 50000;                              /* the chip may stretch the clock while it fetches */
+	if (!mfi_rd(0x00, b, 1)) mfi_ver = b[0];
+	if (!mfi_rd(0x02, b, 1)) mfi_proto = b[0];
+	mfi_stage = 1;                                       /* 1: length read failed */
+	if (mfi_rd(0x30, b, 2)) return;
+	mfi_len_read = b[0] << 8 | b[1];
+	mfi_stage = 2;                                       /* 2: length too big */
+	if (mfi_len_read > (int)sizeof cert) return;
+	for (int off = 0, r = 0x31; off < mfi_len_read; off += 128, r++) {
+		mfi_stage = 0x31 == r ? 0x31 : r;                /* 0x3n: reading that register failed */
+		if (mfi_rd((uint8_t)r, cert + off, mfi_len_read - off < 128 ? mfi_len_read - off : 128)) return;
+	}
+	mfi_stage = 0;
+	cert_len = mfi_len_read;
+}
+static int mfi_sign(const uint8_t *ch, int n)
+{
+	uint8_t b[2] = { (uint8_t)(n >> 8), (uint8_t)n }, st = 0;
+	mfi_wr(0x20, b, 2);                                  /* challenge length (fixed at 32 on 3.0 chips) */
+	if (mfi_wr(0x21, ch, n)) return -1;
+	uint8_t go = 1;
+	if (mfi_wr(0x10, &go, 1)) return -1;                 /* start signature generation */
+	uint32_t t0 = millis();
+	for (;;) {
+		udelay(5000);
+		if (!mfi_rd(0x10, &st, 1) && ((st >> 4) & 7)) break;
+		if (millis() - t0 > 3000) return -2;
+	}
+	sig_ms = (int)(millis() - t0);
+	sig_status = st;
+	if (((st >> 4) & 7) != 1) return -3;                 /* 1 = signature generated */
+	if (mfi_rd(0x11, b, 2)) return -1;
+	sig_len = b[0] << 8 | b[1];
+	if (sig_len > (int)sizeof sig) return -4;
+	return mfi_rd(0x12, sig, sig_len);
+}
+
+/* ---- iAP2 link layer (just enough to open a link) ----
+   Packet: FF 5A, length (BE, whole packet), control, seq, ack, session, header
+   checksum, then payload + payload checksum (each checksum makes its bytes sum to 0).
+   Control bits: SYN 80, ACK 40, EAK 20, RST 10, SLP 08. We send the detect packet,
+   then a SYN offering one control session (id 10); the phone answers SYN+ACK; we ACK
+   it and every data packet after, and show the control-message IDs it sends. */
+#define IAP_SESS 10
+static int ls;                            /* 0 idle, 1 detect sent, 2 detect answered, 3 SYN sent, 4 linked */
+static uint8_t my_seq = 0x2B, their_seq;
+static int syn_tries, got_detect, n_rst, n_msgs, n_data, n_badsum;
+static uint32_t ls_at;
+static uint8_t their_syn[24]; static int their_syn_n; static uint8_t their_ctl;
+static uint16_t msg_ids[6]; static uint16_t msg_len[6];
+static uint8_t last_data[16]; static int last_data_n;
+static uint8_t irx[4096 + 512]; static int irx_n;
+
+static uint8_t sum8(const uint8_t *p, int n) { uint8_t s = 0; while (n--) s += *p++; return (uint8_t)-s; }
+
+static void link_send(uint8_t ctl, uint8_t sess, const uint8_t *pl, int n)
+{
+	static uint8_t o[2200];
+	int len = 9 + (n ? n + 1 : 0);
+	if (len > (int)sizeof o) return;
+	o[0] = 0xFF; o[1] = 0x5A; o[2] = (uint8_t)(len >> 8); o[3] = (uint8_t)len;
+	o[4] = ctl; o[5] = my_seq; o[6] = (ctl & 0x40) ? their_seq : 0; o[7] = sess;
+	o[8] = sum8(o, 8);
+	if (n) { memcpy(o + 9, pl, n); o[9 + n] = sum8(pl, n); }
+	musb_send(1, o, len, 512);
+}
+
+static void iap2_reset(void) { ls = 0; irx_n = 0; syn_tries = 0; }
+
+/* one control-session message: 40 40, length, id, then parameters (length, id, data) */
+static int n_sent_msgs;
+static void send_msg(uint16_t id, uint16_t pid, const uint8_t *data, int n)
+{
+	static uint8_t m[1200];
+	int len = 6 + 4 + n;
+	if (len > (int)sizeof m) return;
+	m[0] = 0x40; m[1] = 0x40; m[2] = (uint8_t)(len >> 8); m[3] = (uint8_t)len; m[4] = (uint8_t)(id >> 8); m[5] = (uint8_t)id;
+	m[6] = (uint8_t)((n + 4) >> 8); m[7] = (uint8_t)(n + 4); m[8] = (uint8_t)(pid >> 8); m[9] = (uint8_t)pid;
+	memcpy(m + 10, data, n);
+	my_seq++;
+	link_send(0x40, IAP_SESS, m, len);
+	n_sent_msgs++;
+}
+
+/* ---- building a control message with nested parameters ----
+   Parameter: 2-byte length (including this 4-byte header), 2-byte ID, data.
+   A group parameter holds parameters as its data. */
+static uint8_t mb[2048];
+static int mb_n, mb_depth, mb_over;
+static int mb_open[6];
+static void mb_begin(uint16_t id) { mb[0] = 0x40; mb[1] = 0x40; mb[4] = (uint8_t)(id >> 8); mb[5] = (uint8_t)id; mb_n = 6; mb_depth = 0; mb_over = 0; }
+static void mb_param(uint16_t pid, const void *d, int n)
+{
+	if (mb_n + 4 + n > (int)sizeof mb) { mb_over = 1; return; }
+	mb[mb_n] = (uint8_t)((n + 4) >> 8); mb[mb_n + 1] = (uint8_t)(n + 4); mb[mb_n + 2] = (uint8_t)(pid >> 8); mb[mb_n + 3] = (uint8_t)pid;
+	if (n) memcpy(mb + mb_n + 4, d, n);
+	mb_n += 4 + n;
+}
+static void mb_none(uint16_t pid) { mb_param(pid, 0, 0); }
+static void mb_u8(uint16_t pid, uint8_t v) { mb_param(pid, &v, 1); }
+static void mb_u16(uint16_t pid, uint16_t v) { uint8_t b[2] = { (uint8_t)(v >> 8), (uint8_t)v }; mb_param(pid, b, 2); }
+static void mb_u32(uint16_t pid, uint32_t v) { uint8_t b[4] = { (uint8_t)(v >> 24), (uint8_t)(v >> 16), (uint8_t)(v >> 8), (uint8_t)v }; mb_param(pid, b, 4); }
+static void mb_str(uint16_t pid, const char *s) { int n = 0; while (s[n]) n++; mb_param(pid, s, n + 1); }   /* UTF-8, NUL-terminated */
+static void mb_group(uint16_t pid) { if (mb_depth < 6) { mb_open[mb_depth++] = mb_n; mb_param(pid, 0, 0); } }
+static void mb_end(void)
+{
+	if (!mb_depth) return;
+	int at = mb_open[--mb_depth], n = mb_n - at;
+	mb[at] = (uint8_t)(n >> 8); mb[at + 1] = (uint8_t)n;
+}
+static void mb_send(void)
+{
+	if (mb_over) return;
+	mb[2] = (uint8_t)(mb_n >> 8); mb[3] = (uint8_t)mb_n;
+	my_seq++;
+	link_send(0x40, IAP_SESS, mb, mb_n);
+	n_sent_msgs++;
+}
+
+static int ident_result;                  /* 0 none, 1 accepted (1D02), -1 rejected (1D03) */
+static int ident_len;                     /* bytes we sent */
+static uint16_t rej_ids[8]; static int n_rej;
+static void send_identification(void);    /* filled in from docs/carplay-iap2.md */
+static void power_updates(void);
+
+static int auth_result;                   /* 0 none, 1 succeeded (AA05), -1 failed (AA04), -2 chip error */
+static void on_message(const uint8_t *m, int n)
+{
+	uint16_t id = (uint16_t)(m[4] << 8 | m[5]);
+	if (id == 0xAA00) {                                  /* RequestAuthenticationCertificate */
+		if (cert_len) send_msg(0xAA01, 0, cert, cert_len);
+		else auth_result = -2;
+	} else if (id == 0xAA02 && n >= 10) {                /* RequestAuthenticationChallengeResponse */
+		int pl = (m[6] << 8 | m[7]) - 4;
+		if (pl > 0 && 10 + pl <= n && mfi_sign(m + 10, pl) == 0) send_msg(0xAA03, 0, sig, sig_len);
+		else auth_result = -2;
+	} else if (id == 0xAA05) auth_result = 1;
+	else if (id == 0x1D00) send_identification();
+	else if (id == 0x1D02) { ident_result = 1; power_updates(); }
+	else if (id == 0x1D03) {                             /* the parameters it rejected */
+		ident_result = -1;
+		for (int o = 6; o + 4 <= n && n_rej < 8; ) {
+			int pl = m[o] << 8 | m[o + 1];
+			rej_ids[n_rej++] = (uint16_t)(m[o + 2] << 8 | m[o + 3]);
+			if (pl < 4) break;
+			o += pl;
+		}
+	}
+	else if (id == 0xAA04) auth_result = -1;
+}
+
+static void send_syn(void)
+{
+	static const uint8_t syn[] = {
+		0x01,             /* link version 1 */
+		0x04,             /* max outstanding packets */
+		0x10, 0x00,       /* max received packet length 4096 */
+		0x05, 0xDC,       /* retransmission timeout 1500 ms */
+		0x00, 0x49,       /* cumulative ACK timeout 73 ms */
+		30,               /* max retransmissions */
+		3,                /* max cumulative ACKs */
+		IAP_SESS, 0, 1,   /* session 10: control, version 1 */
+	};
+	link_send(0x80, 0, syn, sizeof syn);
+	syn_tries++; ls = 3; ls_at = millis();
+}
+
+static void on_link_packet(const uint8_t *p, int len)
+{
+	uint8_t ctl = p[4], seq = p[5], sess = p[7];
+	int pn = len > 9 ? len - 10 : 0;                  /* payload bytes (without its checksum) */
+	if (pn && sum8(p + 9, pn) != p[9 + pn]) { n_badsum++; return; }
+	if (ctl & 0x10) { n_rst++; ls = 2; return; }      /* RST: start over with a new SYN */
+	if (ctl & 0x80) {                                  /* the phone's SYN (+ACK): its parameters */
+		their_ctl = ctl; their_seq = seq;
+		their_syn_n = pn < (int)sizeof their_syn ? pn : (int)sizeof their_syn;
+		memcpy(their_syn, p + 9, their_syn_n);
+		link_send(0x40, 0, 0, 0);                      /* ACK */
+		ls = 4;
+		return;
+	}
+	if (pn) {                                          /* data: ACK it (again, if a retransmit) */
+		int fresh = seq != their_seq;
+		their_seq = seq;
+		link_send(0x40, 0, 0, 0);
+		if (!fresh) return;
+		n_data++;
+		last_data_n = pn < 16 ? pn : 16;
+		memcpy(last_data, p + 9, last_data_n);
+		const uint8_t *m = p + 9;
+		if (sess == IAP_SESS && pn >= 6 && m[0] == 0x40 && m[1] == 0x40) {
+			for (int i = 5; i > 0; i--) { msg_ids[i] = msg_ids[i - 1]; msg_len[i] = msg_len[i - 1]; }
+			msg_ids[0] = (uint16_t)(m[4] << 8 | m[5]); msg_len[0] = (uint16_t)(m[2] << 8 | m[3]);
+			n_msgs++;
+			on_message(m, pn);
+		}
+	}
+}
+
+/* IdentificationInformation, laid out exactly as stock's carplay.mod sends it
+   (docs/carplay-iap2.md section 3), with our own name. The serial and parameter
+   34 are stock's placeholder, the same in every unit. */
+#define ACC_NAME "Head Unit"
+static void send_identification(void)
+{
+	static const uint8_t sent[] = { 0xEA, 0x02, 0xAE, 0x00, 0xAE, 0x02, 0xAE, 0x03, 0xAA, 0x06, 0x50, 0x00, 0x50, 0x02, 0x50, 0x03 };
+	static const uint8_t recv[] = { 0xAE, 0x01, 0x50, 0x01, 0x4E, 0x0B };
+	static const uint8_t langs[] = { 'e', 'n', 0, 'z', 'h', 0 };   /* stock's single SupportedLanguage parameter */
+	mb_begin(0x1D01);
+	mb_str(0, ACC_NAME);                                 /* Name */
+	mb_str(1, "Linux");                                  /* ModelIdentifier */
+	mb_str(2, ACC_NAME);                                 /* Manufacturer */
+	mb_str(3, "0123456789ABCDEF");                       /* SerialNumber (stock placeholder) */
+	mb_str(4, "sw1.1.0");                                /* FirmwareVersion */
+	mb_str(5, "hw1.1.0");                                /* HardwareVersion */
+	mb_param(6, sent, sizeof sent);                      /* MessagesSentByAccessory */
+	mb_param(7, recv, sizeof recv);                      /* MessagesReceivedFromDevice */
+	mb_u8(8, 2);                                         /* PowerProvidingCapability: advanced */
+	mb_u16(9, 0);                                        /* MaximumCurrentDrawnFromDevice */
+	mb_str(12, "en");                                    /* CurrentLanguage */
+	mb_param(13, langs, sizeof langs);                   /* SupportedLanguage */
+	mb_group(16);                                        /* USBHostTransportComponent */
+		mb_u16(0, 0); mb_str(1, "host"); mb_none(2);     /* id, name, supports iAP2 */
+		mb_u8(3, 1);                                     /* CarPlay interface: 1 (our NCM control) */
+		mb_none(4);                                      /* supports CarPlay */
+	mb_end();
+	mb_group(20);                                        /* VehicleInformationComponent */
+		mb_u16(0, 0); mb_str(1, ACC_NAME); mb_u8(2, 0); mb_str(6, ACC_NAME);
+	mb_end();
+	mb_str(34, "0123456789ABCDEF");                      /* stock placeholder (ProductPlanUID?) */
+	ident_len = mb_n;
+	mb_send();
+}
+
+static void power_updates(void)                         /* stock's reply to IdentificationAccepted */
+{
+	mb_begin(0xAE00); mb_none(0); mb_none(1); mb_send();            /* StartPowerUpdates */
+	mb_begin(0xAE03); mb_u16(0, 1000); mb_u8(1, 1); mb_send();      /* PowerSourceUpdate: 1000 mA, charge */
+}
+
+static void iap2_poll(void)
+{
+	static uint8_t b[512];
+	if (musb_rx_ready(1)) {
+		int k = musb_read(1, b, sizeof b);
+		n_iap_in += (uint32_t)k;
+		if (irx_n + k > (int)sizeof irx) irx_n = 0;
+		memcpy(irx + irx_n, b, k); irx_n += k;
+	}
+	/* parse whatever complete packets the stream holds */
+	for (;;) {
+		int i = 0;
+		while (i < irx_n && irx[i] != 0xFF) i++;
+		if (i) { memmove_(irx, irx + i, irx_n - i); irx_n -= i; }
+		if (irx_n < 6) break;
+		if (irx[1] == 0x55 && irx[2] == 0x02 && irx[3] == 0x00 && irx[4] == 0xEE && irx[5] == 0x10) {   /* detect reply */
+			got_detect = 1; if (ls < 2) ls = 2;
+			memmove_(irx, irx + 6, irx_n - 6); irx_n -= 6; continue;
+		}
+		if (irx[1] != 0x5A) { memmove_(irx, irx + 1, irx_n - 1); irx_n--; continue; }
+		if (irx_n < 9) break;
+		int len = irx[2] << 8 | irx[3];
+		if (len < 9 || len > 4096 || sum8(irx, 8) != irx[8]) { n_badsum++; memmove_(irx, irx + 1, irx_n - 1); irx_n--; continue; }
+		if (irx_n < len) break;
+		on_link_packet(irx, len);
+		memmove_(irx, irx + len, irx_n - len); irx_n -= len;
+	}
+	/* drive the handshake */
+	if (ls == 0 && millis() - cfg_at > 100) {
+		static const uint8_t detect[6] = { 0xFF, 0x55, 0x02, 0x00, 0xEE, 0x10 };
+		if (musb_send(1, detect, 6, 512) == 0) { ls = 1; ls_at = millis(); }
+	}
+	if (ls == 1 && millis() - ls_at > 1000) ls = 0;      /* no answer: detect again */
+	if (ls == 2) send_syn();
+	if (ls == 3 && millis() - ls_at > 1500 && syn_tries < 6) send_syn();
+}
+
 static void device_poll(void)
 {
 	musb_poll();
@@ -305,16 +625,7 @@ static void device_poll(void)
 		musb_send(4, sp, 16, 64);
 		musb_send(4, nc, 8, 64);
 	}
-	if (g_config && !detect_sent && millis() - cfg_at > 100) {
-		static const uint8_t detect[6] = { 0xFF, 0x55, 0x02, 0x00, 0xEE, 0x10 };   /* iAP2 detect */
-		if (musb_write(1, detect, 6) == 6) detect_sent = 1;
-	}
-	static uint8_t b[512];
-	if (g_config && musb_rx_ready(1)) {                  /* iAP bulk OUT */
-		int k = musb_read(1, b, sizeof b);
-		n_iap_pkts++; n_iap_in += (uint32_t)k;
-		for (int i = 0; i < k && iap_first_n < (int)sizeof iap_first; i++) iap_first[iap_first_n++] = b[i];
-	}
+	if (g_config) iap2_poll();
 	static uint8_t ntb[2048 + 512];
 	static int nl;
 	if (ncm_on && musb_rx_ready(2)) {                    /* NCM bulk OUT: count frames and their types */
@@ -331,6 +642,13 @@ static void device_poll(void)
 						n_frames++;
 						uint16_t ty = (uint16_t)(ntb[idx + 12] << 8 | ntb[idx + 13]);
 						if (ty != types[0]) { for (int j = 3; j > 0; j--) types[j] = types[j - 1]; types[0] = ty; }
+						const uint8_t *f = ntb + idx;
+						int up = -1;
+						if (ty == 0x86DD && l >= 14 + 40 + 4 && f[20] == 17) up = f[56] << 8 | f[57];                 /* IPv6 UDP dst port */
+						else if (ty == 0x0800 && l >= 14 + 20 + 4 && f[23] == 17) { int ih = (f[14] & 15) * 4; up = f[14 + ih + 2] << 8 | f[14 + ih + 3]; }
+						if (ty == 0x86DD && l >= 14 + 40 && f[20] == 58) n_icmp6++;
+						if (up >= 0 && up != ports[0]) { for (int j = 3; j > 0; j--) ports[j] = ports[j - 1]; ports[0] = (uint16_t)up; }
+						if (up == 5353) n_mdns++;
 					}
 			} else if (nl) n_ntb_bad++;
 			nl = 0;
@@ -373,6 +691,20 @@ static void status(void)
 		p = str_cat(p, musb_high_speed() ? "  high speed" : "");
 		gfx_text(30, 240, s, &font16x32, 1, g_config ? 0x40ff60 : 0xffc040);
 	}
+	p = str_cat(s, "MFi v"); p = hexn(p, mfi_ver, 2); p = str_cat(p, " proto "); p = str_u(p, mfi_proto);
+	p = str_cat(p, "  len "); p = str_u(p, (uint32_t)mfi_len_read); p = str_cat(p, "  cert "); p = str_u(p, (uint32_t)cert_len);
+	if (mfi_stage) { p = str_cat(p, "  FAILED at "); p = hexn(p, (uint32_t)mfi_stage, 2); }
+	p = str_cat(p, "  i2c errs "); p = str_u(p, (uint32_t)mfi_err); *p++ = '/'; p = str_u(p, (uint32_t)mfi_last);
+	p = str_cat(p, "  sent "); p = str_u(p, (uint32_t)n_sent_msgs);
+	if (sig_status >= 0) { p = str_cat(p, "  sig "); p = str_u(p, (uint32_t)sig_len); p = str_cat(p, "B/"); p = str_u(p, (uint32_t)sig_ms); p = str_cat(p, "ms"); }
+	p = str_cat(p, auth_result == 1 ? "  AUTH OK" : auth_result == -1 ? "  AUTH FAILED" : auth_result == -2 ? "  CHIP ERROR" : "");
+	if (ident_result || ident_len) {
+		char s2[128], *q = str_cat(s2, "ident: sent "); q = str_u(q, (uint32_t)ident_len); q = str_cat(q, " bytes  ");
+		q = str_cat(q, ident_result == 1 ? "ACCEPTED" : ident_result == -1 ? "REJECTED:" : "waiting");
+		for (int i = 0; i < n_rej; i++) { *q++ = ' '; q = hexn(q, rej_ids[i], 4); }
+		gfx_text(30, 472, s2, &font16x32, 1, ident_result == 1 ? 0x40ff60 : ident_result < 0 ? 0xff6060 : 0xffffff);
+	}
+	gfx_text(30, 506, s, &font16x32, 1, auth_result == 1 || (cert_len && !auth_result) ? 0x40ff60 : (auth_result < 0 || mfi_stage) ? 0xff6060 : 0xffffff);
 	if (have_dev) {
 		p = str_cat(s, "phone "); p = hexn(p, devd[8] | devd[9] << 8, 4); *p++ = ':'; p = hexn(p, devd[10] | devd[11] << 8, 4);
 		p = str_cat(p, "  \""); p = str_cat(p, manu); p = str_cat(p, "\" \""); p = str_cat(p, prod); p = str_cat(p, "\"");
@@ -380,19 +712,36 @@ static void status(void)
 	}
 	if (sw_line[0]) gfx_text(30, 330, sw_line, &font16x32, 1, 0xffffff);
 	if (phase == 1) {
-		p = str_cat(s, "iAP: detect "); p = str_cat(p, detect_sent ? "sent" : "not sent");
-		p = str_cat(p, "  in "); p = str_u(p, n_iap_in); p = str_cat(p, " bytes: ");
-		for (int i = 0; i < iap_first_n && i < 16; i++) { p = hexn(p, iap_first[i], 2); *p++ = ' '; *p = 0; }
-		gfx_text(30, 380, s, &font16x32, 1, n_iap_in ? 0x40ff60 : 0xffffff);
+		static const char *const lsn[] = { "idle", "detect sent", "detect answered", "SYN sent", "LINKED" };
+		p = str_cat(s, "iAP2: "); p = str_cat(p, lsn[ls]);
+		p = str_cat(p, "  detect "); p = str_cat(p, got_detect ? "yes" : "no");
+		p = str_cat(p, "  SYN x"); p = str_u(p, (uint32_t)syn_tries);
+		p = str_cat(p, "  in "); p = str_u(p, n_iap_in);
+		p = str_cat(p, "  data "); p = str_u(p, (uint32_t)n_data);
+		p = str_cat(p, "  rst "); p = str_u(p, (uint32_t)n_rst); p = str_cat(p, "  bad "); p = str_u(p, (uint32_t)n_badsum);
+		gfx_text(30, 370, s, &font16x32, 1, ls == 4 ? 0x40ff60 : 0xffffff);
+		if (their_syn_n) {
+			p = str_cat(s, "phone SYN "); p = hexn(p, their_ctl, 2); p = str_cat(p, ": ");
+			for (int i = 0; i < their_syn_n && i < 16; i++) { p = hexn(p, their_syn[i], 2); *p++ = ' '; *p = 0; }
+			gfx_text(30, 404, s, &font16x32, 1, 0xa0ffa0);
+		}
+		if (n_msgs) {
+			p = str_cat(s, "messages "); p = str_u(p, (uint32_t)n_msgs); p = str_cat(p, ":");
+			for (int i = 0; i < 6 && i < n_msgs; i++) { *p++ = ' '; p = hexn(p, msg_ids[i], 4); *p++ = '/'; p = str_u(p, msg_len[i]); }
+			gfx_text(30, 438, s, &font16x32, 1, 0x40ff60);
+		}
 		p = str_cat(s, "NCM: "); p = str_cat(p, ncm_on ? "up" : "down"); p = str_cat(p, "  frames "); p = str_u(p, n_frames);
 		p = str_cat(p, "  bad "); p = str_u(p, n_ntb_bad); p = str_cat(p, "  types ");
 		for (int i = 0; i < 4; i++) { p = hexn(p, types[i], 4); *p++ = ' '; *p = 0; }
-		gfx_text(30, 420, s, &font16x32, 1, n_frames ? 0x40ff60 : 0xffffff);
+		p = str_cat(p, " udp"); for (int i = 0; i < 4; i++) { *p++ = ' '; p = str_u(p, ports[i]); }
+		p = str_cat(p, "  mdns "); p = str_u(p, n_mdns); p = str_cat(p, " icmp6 "); p = str_u(p, n_icmp6);
+		gfx_text(30, 544, s, &font16x32, 1, n_frames ? 0x40ff60 : 0xffffff);
 		uint8_t rq[6][8];                                /* the phone's recent requests to us */
 		int n = musb_recent(rq, 6);
 		for (int i = 0; i < n; i++) {
 			p = s; for (int j = 0; j < 8; j++) { p = hexn(p, rq[i][j], 2); *p++ = ' '; *p = 0; }
-			gfx_text(30 + (i / 3) * 480, 470 + (i % 3) * 34, s, &font16x32, 1, 0xa0c0ff);
+			gfx_text(30 + i * 480, 580, s, &font16x32, 1, 0xa0c0ff);
+			if (i == 1) break;
 		}
 	}
 	dcache_flush();
@@ -468,6 +817,7 @@ int main(void)
 	__asm__ volatile("csrw mtvec, %0" :: "r"(cp_trap_entry));
 	__asm__ volatile("csrci mstatus, 8\n\tcsrw mie, zero");   /* keep the boot ROM's USB handler out */
 
+	mfi_init();                                          /* certificate ready before the phone asks */
 	/* host mode with USB-A's 5 V on, as in iphonetest.c */
 	wr32(0x02000098, (rd32(0x02000098) & ~(0xFu << 8)) | (1u << 8));    /* PD18 output */
 	wr32(0x020000A0, rd32(0x020000A0) | (1u << 18));                    /* PD18 high: VBUS on */
