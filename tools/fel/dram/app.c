@@ -267,7 +267,14 @@ int main(void)
 		}
 		dirty |= radio_tick() && st.page == 0;
 		if (call_ui_tick()) { dirty = 1; st.pressed = -1; st.hold_t0 = 0; }
-		dirty |= bt_poll() && (st.page == 1 || bt.call);
+		{
+			static int was_playing;
+			dirty |= bt_poll() && (st.page == 1 || bt.call);
+			/* the phone started playing: follow it, unless the Radio page is open */
+			if (bt.playing && !was_playing && !bt.call && st.page != 0 && snd_input != SOUND_IN_BT)
+				sound_input(SOUND_IN_BT);
+			was_playing = bt.playing;
+		}
 		dirty |= st.page == 1 && bt_ui_tick();
 		int b = now_ms() < st.banner_until || (st.page == 0 && radio_note());
 		if (b != banner) { banner = b; dirty = 1; }
