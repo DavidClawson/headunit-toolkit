@@ -137,6 +137,7 @@ static const uint8_t bd_init[][2] = {
 static void bd(uint8_t reg, uint8_t v) { twi_write(2, BD, reg, 1, &v, 1); }
 
 int snd_vol = 25, snd_muted;
+uint8_t snd_input = SOUND_IN_RADIO;
 static int snd_ready;
 
 void sound_init(void)
@@ -151,7 +152,7 @@ void sound_init(void)
 	sound_apply();
 }
 
-void sound_input(uint8_t in) { sound_init(); bd(0x05, in); }
+void sound_input(uint8_t in) { sound_init(); snd_input = in; bd(0x05, in); }
 
 void sound_step(int dir)
 {

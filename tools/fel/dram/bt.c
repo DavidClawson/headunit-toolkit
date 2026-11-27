@@ -58,6 +58,7 @@ static unsigned num(const char *s, unsigned k)
 static int handle(void)
 {
 	if (n < 2) return 0;
+	if (line[0] == 'I' || line[0] == 'P') logf("bt: %s\n", line);   /* call / phone lines, for now */
 	char a = line[0], b = line[1];
 	const char *d = line + 2;
 	unsigned dl = n - 2;
@@ -81,8 +82,18 @@ static int handle(void)
 	if (a == 'M' && b == 'A' && dl == 0) { bt.playing = 0; bt.connected = 1; return 1; }
 	if (a == 'M' && b == 'B' && dl == 0) { bt.playing = 1; bt.connected = 1; bt.pos_ms = millis(); return 1; }
 	if (a == 'I' && b == 'B') { bt.connected = 1; return 1; }
+	if (a == 'I' && (b == 'D' || b == 'C' || b == 'R')) {   /* ringing / dialling / caller number */
+		if (dl) copy_field(bt.number, sizeof bt.number, d, dl);
+		if (b == 'D') bt.call = BT_CALL_RINGING;
+		if (b == 'C') bt.call = BT_CALL_OUTGOING;
+		bt.connected = 1;
+		return 1;
+	}
+	if (a == 'I' && b == 'G') { bt.call = BT_CALL_ACTIVE; bt.call_ms = millis(); return 1; }
+	if (a == 'I' && b == 'F') { bt.call = BT_CALL_NONE; bt.number[0] = 0; return 1; }
 	if (a == 'I' && b == 'A') {
 		bt.connected = bt.playing = 0;
+		bt.call = BT_CALL_NONE; bt.number[0] = 0;
 		bt.title[0] = bt.artist[0] = bt.album[0] = 0; bt.pos = bt.len = 0;
 		return 1;
 	}

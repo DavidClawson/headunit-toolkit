@@ -25,6 +25,8 @@
 #include "radio_ui.h"
 #include "bt.h"
 #include "bt_ui.h"
+#include "call_ui.h"
+#include "tuner.h"
 
 #ifndef SECONDS
 #define SECONDS 60
@@ -91,6 +93,7 @@ static void draw(void)
 			gfx_text((GW - gfx_text_w(m, &font8x16, 1)) / 2, 400, m, &font8x16, 1, 0xc8d4ec);
 		}
 	}
+	if (bt.call) call_ui_draw(st.pressed);
 	const char *note = st.page == 0 ? radio_note() : 0;
 	if (now_ms() < st.banner_until || note) {
 		gfx_rrect(340, 160, 600, 90, 30, 0x2b8a3e);
@@ -140,8 +143,27 @@ static void open_page(void)
 }
 
 /* returns 1 if the screen needs redrawing */
+static int handle_call(const event *e)
+{
+	if (e->type == EV_KEY) {
+		if (e->key == MCU_KEY_CW || e->key == MCU_KEY_CCW) sound_step(e->key == MCU_KEY_CW ? 1 : -1);
+		if (e->key == MCU_KEY_KNOB) call_ui_knob_push();
+		return 1;
+	}
+	int p = call_ui_hit(e->x, e->y);
+	if (e->type == EV_TOUCH_UP) {
+		if (st.pressed >= 0 && p == st.pressed) call_ui_press(p);
+		st.pressed = -1;
+		return 1;
+	}
+	if (p == st.pressed) return 0;
+	st.pressed = p;
+	return 1;
+}
+
 static int handle(const event *e)
 {
+	if (bt.call) return handle_call(e);
 	int home = st.page < 0;
 	switch (e->type) {
 	case EV_KEY:
@@ -244,7 +266,8 @@ int main(void)
 			if (radio_hold(st.pressed)) { st.pressed = -1; dirty = 1; }   /* the popup takes over */
 		}
 		dirty |= radio_tick() && st.page == 0;
-		dirty |= bt_poll() && st.page == 1;
+		if (call_ui_tick()) { dirty = 1; st.pressed = -1; st.hold_t0 = 0; }
+		dirty |= bt_poll() && (st.page == 1 || bt.call);
 		dirty |= st.page == 1 && bt_ui_tick();
 		int b = now_ms() < st.banner_until || (st.page == 0 && radio_note());
 		if (b != banner) { banner = b; dirty = 1; }
