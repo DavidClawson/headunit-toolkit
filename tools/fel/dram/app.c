@@ -6,7 +6,7 @@
  *   knob CW/CCW: move the focus ring    knob push: open the focused tile
  *   tap a tile: open it                 "< Back" (or knob push) on a page: return
  *   phone key: banner for 2 s
- *   Radio page: see radio_ui.c (knob tunes there)
+ *   Radio page: see radio_ui.c (knob push switches the knob mode there; Back leaves)
  *   hold the status bar 3 s: reboot into stock firmware once (fw.c)
  *   phone key on the Settings page: deliberate freeze, to test that the
  *   watchdog (petted every loop pass when booted from NOR) restarts us
@@ -138,6 +138,7 @@ static int handle(const event *e)
 			return radio_knob(e->key == MCU_KEY_CW ? 1 : -1);
 		if (e->key == MCU_KEY_CW && home) st.focus = (st.focus + 1) % HOME_TILES;
 		else if (e->key == MCU_KEY_CCW && home) st.focus = (st.focus + HOME_TILES - 1) % HOME_TILES;
+		else if (e->key == MCU_KEY_KNOB && st.page == 0) return radio_knob_push();   /* Back button leaves */
 		else if (e->key == MCU_KEY_KNOB) { st.page = home ? st.focus : -1; if (st.page == 0) radio_open(); }
 		else if (e->key == MCU_KEY_PHONE && st.page == 3) freeze_test();
 		else if (e->key == MCU_KEY_PHONE) st.banner_until = now_ms() + 2000;

@@ -1,6 +1,9 @@
 /*
  * radio_ui.c: the Radio page.
- *   knob: tune 0.2 MHz        Seek < / >: next station down / up
+ *   knob turn: volume (default), presets, or tune 0.2 MHz
+ *   knob push: VOLUME -> PRESET -> TUNE -> VOLUME (shown top right, area ringed);
+ *   PRESET and TUNE fall back to VOLUME after 5 s without a knob move
+ *   Seek < / >: next station down / up
  *   - / + 0.2: tune a step    Scan: search the band, the 6 strongest go to the presets
  *   preset tap: tune it       preset hold 1 s: store the current station there
  *   Vol - / +, Mute
@@ -13,12 +16,17 @@
 
 enum { B_SEEKDN = 1, B_DN, B_UP, B_SEEKUP, B_SCAN, B_P1, B_P6 = B_P1 + 5, B_VOLDN, B_VOLUP, B_MUTE, B_N };
 #define NPRE 6
+enum { KNOB_VOLUME, KNOB_PRESET, KNOB_TUNE, KNOB_N };   /* push order; VOLUME is home */
+static const char *const knob_name[KNOB_N] = { "KNOB: VOLUME", "KNOB: PRESET", "KNOB: TUNE" };
+#define KNOB_IDLE_MS 5000   /* PRESET / TUNE fall back to VOLUME after this long untouched */
 #define ACCENT 0xd9480f
 
 static struct {
 	int opened, init_err;
 	uint16_t pre[NPRE];
 	int vol, muted;
+	int knob;               /* KNOB_* */
+	uint32_t knob_ms;       /* last knob turn or push */
 	int scanning, nfound;
 	struct { uint16_t f; uint8_t rssi; } found[40];
 	uint16_t before_scan;
@@ -123,6 +131,14 @@ void radio_draw(int pressed)
 	p = str_cat(p, " dBuV  SNR "); p = str_u(p, tuner.snr); str_cat(p, " dB");
 	gfx_text(1000, 266, s, &font8x16, 1, 0xc8d4ec);
 
+	/* what the knob does: label + a ring round that area */
+	gfx_rrect(1000, 92, 240, 40, 14, 0x2b3a5c);
+	const char *kn = knob_name[r.knob];
+	gfx_text(1000 + (240 - gfx_text_w(kn, &font8x16, 1)) / 2, 104, kn, &font8x16, 1, 0xffffff);
+	if (r.knob == KNOB_TUNE)   gfx_rring(fx - 110, 92, fw + 200, 170, 24, 3, 0xffffff);
+	if (r.knob == KNOB_PRESET) gfx_rring(38, 438, 1204, 114, 24, 3, 0xffffff);
+	if (r.knob == KNOB_VOLUME) gfx_rring(38, 558, 1204, 114, 24, 3, 0xffffff);
+
 	button(B_SEEKDN, "|<< Seek", 0, pressed == B_SEEKDN, 0x1971c2);
 	button(B_DN, "- 0.2", 0, pressed == B_DN, 0x2b3a5c);
 	button(B_UP, "+ 0.2", 0, pressed == B_UP, 0x2b3a5c);
@@ -195,10 +211,34 @@ int radio_press(int id, uint32_t held_ms)
 	return 1;
 }
 
+int radio_knob_push(void)
+{
+	r.knob = (r.knob + 1) % KNOB_N;
+	r.knob_ms = millis();
+	return 1;
+}
+
 int radio_knob(int dir)
 {
-	if (r.init_err || r.scanning) return 0;
-	tuner_tune((uint16_t)(tuner.freq + dir * FM_STEP));
+	if (r.init_err) return 0;
+	r.knob_ms = millis();
+	if (r.knob == KNOB_VOLUME) {
+		r.vol += dir;
+		if (r.vol < 1) r.vol = 1;
+		if (r.vol > SOUND_MAX) r.vol = SOUND_MAX;
+		r.muted = 0; apply_volume();
+		return 1;
+	}
+	if (r.scanning) return 0;
+	if (r.knob == KNOB_TUNE) { tuner_tune((uint16_t)(tuner.freq + dir * FM_STEP)); return 1; }
+	/* presets: the next filled one after the current station, either way round */
+	int cur = -1;
+	for (int i = 0; i < NPRE; i++) if (r.pre[i] && r.pre[i] == tuner.freq) cur = i;
+	for (int k = 1; k <= NPRE; k++) {
+		int i = ((cur < 0 ? (dir > 0 ? -1 : 0) : cur) + dir * k + 2 * NPRE) % NPRE;
+		if (r.pre[i]) { tuner_tune(r.pre[i]); return 1; }
+	}
+	say("No presets yet: tap Scan", 0);
 	return 1;
 }
 
@@ -206,6 +246,7 @@ int radio_tick(void)
 {
 	if (!r.opened || r.init_err) return 0;
 	int c = tuner_poll();
+	if (r.knob != KNOB_VOLUME && millis() - r.knob_ms > KNOB_IDLE_MS) { r.knob = KNOB_VOLUME; c |= 1; }
 	if (c == 2 && r.scanning) {
 		logf("radio: seek stop %u valid %u limit %u RSSI %u SNR %u\n",
 		     tuner.freq, tuner.valid, tuner.band_limit, tuner.rssi, tuner.snr);
