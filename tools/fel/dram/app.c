@@ -28,6 +28,7 @@
 #include "call_ui.h"
 #include "settings.h"
 #include "settings_ui.h"
+#include "audio.h"
 #include "tuner.h"
 
 #ifndef SECONDS
@@ -188,7 +189,10 @@ static int handle(const event *e)
 		        in_back(e->x, e->y) ? 0 : st.page == 0 ? radio_hit(e->x, e->y) :
 		        st.page == 1 ? bt_ui_hit(e->x, e->y) :
 		        st.page == 3 ? settings_ui_hit(e->x, e->y) : -1;
-		if (e->type == EV_TOUCH_DOWN) { st.press_ms = e->ms; st.hold_fired = 0; }
+		if (e->type == EV_TOUCH_DOWN) {
+			st.press_ms = e->ms; st.hold_fired = 0;
+			if (p >= 0 && !cfg.no_clicks) audio_click();
+		}
 		else if (p != st.pressed) { st.press_ms = e->ms; st.hold_fired = 0; }   /* slid onto another button */
 		if (p == st.pressed) return e->type == EV_TOUCH_DOWN;
 		st.pressed = p;
@@ -222,6 +226,7 @@ int main(void)
 	if (cfg.led < LED_PURPLE || cfg.led > LED_GREEN) cfg.led = LED_WHITE;   /* solid colours only */
 	mcu_key_led(cfg.led);
 	bt_init();
+	if (audio_init()) logf("app: audio init failed\n");
 	/* resume the last source, on its page (Back goes home) */
 	st.page = st.focus = cfg.source == SRC_BT ? 1 : 0;
 	open_page();
@@ -236,6 +241,10 @@ int main(void)
 	while (nor || millis() - t0 < SECONDS * 1000u) {
 		fw_pet();
 		settings_tick();
+		audio_service();
+		/* touch sounds: only while the source is Bluetooth with nothing playing (the BD3702
+		   switches inputs, it doesn't mix), so the F133 can be heard instead */
+		sound_idle_f133(!cfg.no_clicks && snd_input == SOUND_IN_BT && !bt.playing && !bt.call);
 		event e;
 		while (input_next(&e)) {
 			events++;
