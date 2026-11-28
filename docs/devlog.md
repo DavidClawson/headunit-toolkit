@@ -1004,7 +1004,8 @@ iPhone:
 | CarPlay start (`0x4300`/`0x4301`) | done | phone connects to our port 7000 |
 | Pairing (pair-setup, pair-verify) | done | SRP-6a 3072, Ed25519, X25519; our own code + Monocypher |
 | Encrypted control channel, MFi-SAP | done | phone accepts the chip's signature |
-| CarPlay session (SETUP, RECORD, streams) | next | binary plists; screen stream; H.264 |
+| CarPlay session (SETUP, /info, RECORD, screen stream) | done | H.264 High L3.1 1280×720 arrives and decrypts |
+| H.264 decode on the VE, touch, audio | next | `docs/video-decode.md` |
 
 The last two rows are where hosting stock's `carplay.mod` (the chosen
 direction, `docs/carplay-host.md`) or a large amount of our own code comes
@@ -1098,3 +1099,33 @@ Our own receiver code now gets through everything before the session itself:
 - **The phone's first pair-setup message** is `00 01 00 06 01 01` (method 0, state 1, no transient flag), sent as `application/x-apple-binary-plist` even though the body is TLV8.
 
 **Next:** SETUP / RECORD (binary plists), then the screen stream and H.264.
+
+## 2026-11-27 (night): the iPhone streams its CarPlay screen to our firmware
+
+With `docs/carplay-session.md` implemented, the whole session runs:
+
+`AUTH SETUP1 INFO REC CMD S110 FB`
+
+| Item | On the bench |
+|---|---|
+| connections | control (7000), event channel (7001, the phone connects back), screen (7002) |
+| `/info` | accepted: our 1280×720 display, one view area, touch descriptor, no audio |
+| screen config | `avcC`, **H.264 High profile, level 3.1, 1280×720** (parsed from the SPS) |
+| first frame | 135 ms after SETUP 110 |
+| one minute of streaming | 1,043 frames decrypted (9.9 MB, about 17 fps while idle), 2 bad, 1 counter resync |
+
+**The screen stream:**
+- Each message has a 128-byte header.
+- The frames are ChaCha20-Poly1305, with that header as the AAD.
+- The key is HKDF over the pair-verify secret with `DataStream-Salt<streamConnectionID>`. The ID is above 2⁶³ and is printed unsigned.
+
+**Counter resync.** In the first run we kept counting while the phone's frame counter jumped: 213 good, then every frame failed. Now the counter restarts with each config message, and a failed frame tries a few nearby counters before giving up.
+
+**Not used yet:**
+- The phone never sent a timing packet (`ntp 0`).
+- It never sent anything on the event channel.
+- Audio was left out of SETUP and never came.
+
+All of this is tested on the Mac with a real x264 stream (`tools/fel/dram/test/session_check.py`).
+
+**Next:** decode the H.264 on the Cedar VE (`docs/video-decode.md`) and show it on the panel, then touch, then audio.
