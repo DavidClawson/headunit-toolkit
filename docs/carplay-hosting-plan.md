@@ -563,3 +563,129 @@ dependency on the vendor kernel's secret, and a frozen Apple stack.
   `car_play.py`).
 - **Talks and papers:** Troopers 2024, "Apple CarPlay: What's Under the
   Hood"; USENIX VehicleSec 2025 on CarPlay adapters (background only).
+
+## What gets the phone to connect (added 2026-11-27)
+
+The bench is stuck after `IdentificationAccepted`:
+- NCM is up;
+- we answer `_airplay._tcp` over IPv6 link-local with stock's records;
+- but the phone never sends a neighbour solicitation for us, never SYNs,
+  and never advertises `_carplay-ctrl._tcp`.
+
+This section is what the two public open-source receivers do at that point.
+They're used as protocol references only (both GPL-3.0; nothing copied):
+- **xcertplay:** https://github.com/shilapi/xcertplay, Kotlin, read from a
+  clone on 2026-11-27;
+- **LIVI:** https://github.com/f-io/LIVI, Rust, created 2025-05, pushed
+  2026-11-27. xcertplay credits LIVI as its reference.
+
+### 1. The step we're missing: `CarPlayAvailability` → `CarPlayStartSession` over iAP2
+
+**Confidence: high that this is what both do; medium that it fixes our
+role-switch path.**
+
+Both declare two CarPlay messages in `IdentificationInformation` that
+stock's layout ([carplay-iap2.md](carplay-iap2.md) §2) lacks:
+- **`0x4301` CarPlayStartSession** in param 6 (MessagesSentByAccessory);
+- **`0x4300` CarPlayAvailability** in param 7 (MessagesReceivedFromDevice).
+
+xcertplay `Iap2IdentificationClient.kt`, lists `MESSAGES_SENT_BY_ACCESSORY`
+and `MESSAGES_RECEIVED_FROM_PHONE`.
+
+The phone then sends `0x4300`, and the accessory **answers every `0x4300`
+with `0x4301`**, without checking the availability flag inside it
+(`Iap2WiredControlClient.kt`, `CARPLAY_AVAILABILITY` branch).
+
+**`0x4300` layout** (LIVI `native/crates/iap2-csm/src/messages/car_play.rs`;
+the same in xcertplay `Iap2Messages.kt`):
+- group 0 (wired): {0 available `u8`, 1 USB transport identifier `str`};
+- group 1: wireless;
+- group 2: theme assets.
+
+**`0x4301` parameters:**
+
+| ID | Content | xcertplay's wired value |
+|---|---|---|
+| 0 | group, wired: {0 IP address string, repeated} | `fe80::2`, its link-local, with no `%scope` |
+| 1 | group, wireless (SSID, passphrase, channel, IPs, security) | omitted on wired |
+| 2 | u32, AirPlay port | its receiver port |
+| 3 | string, device identifier | the NCM MAC as `aa:bb:cc:dd:ee:ff` |
+| 4 | string, public key | its Ed25519 public key in hex (the same value as the `pk` TXT key) |
+| 5 | string, source version | `"950.7.1"` |
+| 6, 7, 8 | sdk version, cluster asset, mutual auth | optional, unset |
+
+In xcertplay's wired path, **no mDNS runs at all.** `CarPlayBonjour` is only
+started for wireless (`CarPlayController.kt` around line 1010). The phone
+learns the address and port from `0x4301` and connects to the receiver
+itself. So the old flow (phone advertises `_carplay-ctrl._tcp`, accessory
+sends `GET /ctrl-int/1/connect`; stock and wiomoc) isn't what current
+public receivers rely on.
+
+**Our phone's behaviour fits this.** It queries `_airplay._tcp` but never
+connects or advertises `_carplay-ctrl`, and stock's identification
+declares neither `0x4300` nor `0x4301`. So the phone may simply never get a
+start-session (**inferred**).
+
+**The other things xcertplay sends after identification:**
+- `AE03` PowerSourceUpdate;
+- five subscriptions: `5000` (media group {1,4,6,12,26}, playback group
+  {0,1,2,3,7}), `5200`, `AE00` (params 4/5/6), `4157` ({0,4,5}) and `4154`
+  ({0,1,2,3,4,11});
+- `6800` StartHID, declaring a media-remote HID component (identification
+  param 18).
+
+**Its identification also differs from stock's:**
+- param 8 = 2;
+- param 9 = 20;
+- param 10, an EA protocol (its own name);
+- the transport group 16 named `"USBHostTransport"`, with flags 2 and 4 and
+  the CarPlay interface number.
+
+None of these is shown to be required. `0x4300`/`0x4301` is the
+CarPlay-specific difference.
+
+**The big caveat: both projects use a different wired topology.** They are
+the **USB host**: no role switch. They pick the iPhone configuration that has
+usbmux plus NCM (`IphoneCarPlayConfiguration.kt`; our devlog's
+configuration 3/4 family), run iAP2 over **usbmux → lockdown →
+`com.apple.carkit.service`** (xcertplay `LockdownCarKitClient.kt`; LIVI
+`iap2-wired/src/carkit.rs`), and use the phone's own NCM function. Group 16's
+interface number there is the iPhone's NCM interface.
+
+No public source shows `0x4300` arriving over the role-switched,
+accessory-as-device path we use. **Whether the phone sends `0x4300` to a
+role-switched gadget is unverified.** The cheapest test is to add the two IDs
+to params 6 and 7 and log what arrives.
+
+### 2. mDNS and NCM details
+
+**Confidence: high for what the code does.**
+- **Wired: xcertplay has no mDNS.** It's IPv6 only: link-local `fe80::2`,
+  with neighbour discovery left to the Android kernel (`Ipv6NcmBridge.kt`,
+  `CarPlayVpnService.kt`). There's no IPv4, no DHCP server and no IPv4
+  link-local.
+- **Device ID:** the MAC read from the iPhone NCM descriptor
+  (`NcmUsbBridge.readNcmHostMac`) is used as the `0x4301` device identifier.
+- **Wireless TXT** (`CarPlayBonjour.kt`): keys include `deviceid`,
+  `features=0x44540380,0x61`, `srcvers`, `pk` and `model`.
+- **Wireless connect direction:** the receiver browses `_carplay-ctrl._tcp`
+  and sends a connect probe. So the receiver connects first in that mode
+  too.
+
+### 3. User-facing steps on the phone
+
+| Step | Confidence |
+|---|---|
+| **Host-mode path:** lockdown pairing shows **"Trust This Computer?"** once; LIVI's log says "confirm the trust dialog on the phone" (`carkit.rs`, `pair_device`). The pair record is saved and reused. **Doesn't apply to our role-switch path**, which uses no lockdown | high |
+| **xcertplay's usage notes** ask for Bluetooth pairing first, but that's for wireless | high |
+| **The "Use CarPlay?"/"Allow CarPlay while locked" prompt** and the per-car entry in Settings > General > CarPlay: neither project's code triggers either explicitly. iOS presumably shows them when it first starts a session with a new accessory, i.e. after `0x4301`/the AirPlay connection. That we've never seen a prompt is consistent with the phone never deciding to start CarPlay. A car previously set to "don't use" in Settings would also block it | **guess** |
+
+### Next bench step
+
+1. Add `0x4301` to identification param 6 and `0x4300` to param 7.
+2. On `0x4300`, send `0x4301` with our link-local address, `7000`, our MAC
+   string, our Ed25519 public key in hex, and a source version string.
+3. Have a TCP listener on port 7000 ready.
+4. If `0x4300` never arrives on the role-switch path, the fallback is the
+   host-mode topology both public projects use: usbmux/lockdown/carkit. That
+   needs a usbmux client and a one-time Trust prompt on the phone.

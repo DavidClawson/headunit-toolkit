@@ -497,6 +497,35 @@ static char *fmt_time(char *p, uint64_t secs)             /* Y-M-D h:m:s (civil 
 }
 
 static int auth_result;                   /* 0 none, 1 succeeded (AA05), -1 failed (AA04), -2 chip error */
+/* CarPlayAvailability (0x4300) -> CarPlayStartSession (0x4301): the step the public
+   receivers use to start wired CarPlay (docs/carplay-hosting-plan.md, "What gets the
+   phone to connect"). The public key is a placeholder until pairing exists. */
+static int n_avail, n_start, avail_wired = -1;
+static void start_session(void)
+{
+	mb_begin(0x4301);
+	mb_group(0);                                         /* wired */
+		mb_str(0, "fe80::f1:33ff:fe00:2");               /* our link-local, no scope */
+	mb_end();
+	mb_u32(2, 7000);                                     /* AirPlay port */
+	mb_str(3, "02:f1:33:00:00:02");                      /* device id: our NCM MAC */
+	mb_str(4, "3b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29");   /* public key (placeholder) */
+	mb_str(5, "320.14");                                 /* source version, as in our TXT */
+	mb_send();
+	n_start++;
+}
+static void on_avail(const uint8_t *m, int n)
+{
+	n_avail++;
+	for (int o = 6; o + 4 <= n; ) {                      /* group 0 (wired): param 0 = available */
+		int pl = m[o] << 8 | m[o + 1], id = m[o + 2] << 8 | m[o + 3];
+		if (pl < 4 || o + pl > n) break;
+		if (id == 0 && pl >= 9 && (m[o + 6] << 8 | m[o + 7]) == 0) avail_wired = m[o + 8];
+		o += pl;
+	}
+	start_session();
+}
+
 static void on_message(const uint8_t *m, int n)
 {
 	uint16_t id = (uint16_t)(m[4] << 8 | m[5]);
@@ -510,6 +539,7 @@ static void on_message(const uint8_t *m, int n)
 	} else if (id == 0xAA05) auth_result = 1;
 	else if (id == 0x1D00) send_identification();
 	else if (id == 0x4E0B) on_time(m, n);
+	else if (id == 0x4300) on_avail(m, n);
 	else if (id == 0x1D02) { ident_result = 1; power_updates(); }
 	else if (id == 0x1D03) {                             /* the parameters it rejected */
 		ident_result = -1;
@@ -577,8 +607,9 @@ static void on_link_packet(const uint8_t *p, int len)
 #define ACC_NAME "Head Unit"
 static void send_identification(void)
 {
-	static const uint8_t sent[] = { 0xEA, 0x02, 0xAE, 0x00, 0xAE, 0x02, 0xAE, 0x03, 0xAA, 0x06, 0x50, 0x00, 0x50, 0x02, 0x50, 0x03 };
-	static const uint8_t recv[] = { 0xAE, 0x01, 0x50, 0x01, 0x4E, 0x0B };
+	static const uint8_t sent[] = { 0xEA, 0x02, 0xAE, 0x00, 0xAE, 0x02, 0xAE, 0x03, 0xAA, 0x06, 0x50, 0x00, 0x50, 0x02, 0x50, 0x03,
+	                                0x43, 0x01 };   /* + CarPlayStartSession (xcertplay/LIVI; stock lacks it) */
+	static const uint8_t recv[] = { 0xAE, 0x01, 0x50, 0x01, 0x4E, 0x0B, 0x43, 0x00 };   /* + CarPlayAvailability */
 	static const uint8_t langs[] = { 'e', 'n', 0, 'z', 'h', 0 };   /* stock's single SupportedLanguage parameter */
 	mb_begin(0x1D01);
 	mb_str(0, ACC_NAME);                                 /* Name */
@@ -655,7 +686,7 @@ static void iap2_poll(void)
 #define NSEEN 12
 static char seen[NSEEN][44];
 static int n_seen;
-static uint32_t n_dhcp_req;
+static uint32_t n_dhcp_req, n_mdns_resp, n_pings_sent;
 static int want_airplay;                  /* the phone asked for _airplay._tcp */
 static uint8_t phone_ip4[4];
 
@@ -710,6 +741,7 @@ static const char *rtype(int ty) { return ty == 12 ? "PTR" : ty == 33 ? "SRV" : 
 static void on_mdns(const uint8_t *m, int n)
 {
 	if (n < 12) return;
+	if ((m[2] & 0x80) && n_pings_sent) n_mdns_resp++;  /* responses after our first query */
 	int qd = m[4] << 8 | m[5], rr = (m[6] << 8 | m[7]) + (m[8] << 8 | m[9]) + (m[10] << 8 | m[11]);
 	int off = 12;
 	char nm[96];
@@ -750,7 +782,8 @@ static const uint8_t my_mac[6] = { 0x02, 0xF1, 0x33, 0x00, 0x00, 0x02 };
 static const uint8_t my_ll[16] = { 0xFE, 0x80, 0, 0, 0, 0, 0, 0, 0x00, 0xF1, 0x33, 0xFF, 0xFE, 0x00, 0x00, 0x02 };
 static const uint8_t mdns6[16] = { 0xFF, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xFB };
 static const uint8_t all6[16] = { 0xFF, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x01 };
-static uint32_t n_ns, n_na_sent, n_ping6, n_mdns_ans, n_syn;
+static uint32_t n_ns, n_na_sent, n_ping6, n_mdns_ans, n_syn, n_pong;
+static uint8_t phone_ll[16], phone_mac[6]; static int have_phone_ll;
 static uint16_t syn_ports[4];
 static uint16_t in_seq;
 #define ADVERTISE 1                       /* answer _airplay._tcp as stock does (docs/carplay-iap2.md section 5) */
@@ -867,13 +900,34 @@ static void send_airplay_answer(void)
 	n_mdns_ans++;
 }
 
+static void ping_phone(void)
+{
+	uint8_t *p = tx6 + 54;
+	memset(p, 0, 16);
+	p[0] = 128; p[5] = 0x33; p[7] = (uint8_t)n_pings_sent;   /* echo request, id 0x0033, seq */
+	send6(phone_mac, phone_ll, 58, 16);
+	n_pings_sent++;
+}
+static void ask_phone(void)                                 /* mDNS query: _remotepairing._tcp.local PTR */
+{
+	uint8_t *u = tx6 + 54, *d = u + 8;
+	memset(d, 0, 12); d[5] = 1;
+	int k = 12 + dns_put(d + 12, "_remotepairing._tcp.local");
+	d[k++] = 0; d[k++] = 12; d[k++] = 0; d[k++] = 1;
+	int ul = 8 + k;
+	u[0] = 5353 >> 8; u[1] = 5353 & 255; u[2] = 5353 >> 8; u[3] = 5353 & 255; u[4] = (uint8_t)(ul >> 8); u[5] = (uint8_t)ul;
+	send6(0, mdns6, 17, ul);
+}
+
 static void on_ip6(const uint8_t *f, int l)
 {
 	const uint8_t *ip = f + 14, *p = ip + 40;
 	int plen = ip[4] << 8 | ip[5];
 	if (l < 54 || 54 + plen > l) return;
-	if (ip[6] == 58 && plen >= 24) {                     /* ICMPv6 */
-		if (p[0] == 135 && !memcmp(p + 8, my_ll, 16)) {  /* neighbour solicitation for us */
+	if (ip[8] == 0xFE && ip[9] == 0x80 && memcmp(ip + 8, my_ll, 16)) { memcpy(phone_ll, ip + 8, 16); memcpy(phone_mac, f + 6, 6); have_phone_ll = 1; }
+	if (ip[6] == 58 && plen >= 8) {                      /* ICMPv6 */
+		if (p[0] == 129 && !memcmp(ip + 24, my_ll, 16)) n_pong++;   /* the phone answered our ping */
+		if (p[0] == 135 && plen >= 24 && !memcmp(p + 8, my_ll, 16)) {  /* neighbour solicitation for us */
 			n_ns++;
 			int dad = 1; for (int i = 0; i < 16; i++) if (ip[8 + i]) dad = 0;
 			if (dad) send_na(0, all6, 0); else send_na(f + 6, ip + 8, 1);
@@ -917,12 +971,18 @@ static void device_poll(void)
 		musb_send(4, sp, 16, 64);
 		musb_send(4, nc, 8, 64);
 	}
+#ifndef MACTEST
 	if (g_config) iap2_poll();
+#endif
 	static int was_up; static uint32_t up_at, last_ans;
 	if (ncm_on && !was_up) { up_at = millis(); }
 	was_up = ncm_on;
 	static int announced;
 	if (ncm_on && !announced && millis() - up_at > 500) { announced = 1; send_na(0, all6, 0); }   /* unsolicited NA */
+	static uint32_t last_probe;
+	if (ncm_on && have_phone_ll && millis() - up_at > 3000 && millis() - last_probe > 2000 && n_pings_sent < 10) {
+		last_probe = millis(); ping_phone(); ask_phone();
+	}
 	static int n_announce;
 	if (ADVERTISE && ncm_on && n_announce < 3 && millis() - up_at > 1000u + 1000u * (uint32_t)n_announce) { n_announce++; send_airplay_answer(); }
 	if (ADVERTISE && ncm_on && want_airplay && millis() - last_ans > 1000) { want_airplay = 0; last_ans = millis(); send_airplay_answer(); }
@@ -1044,10 +1104,15 @@ static void status(void)
 		p = str_cat(s, "us fe80::f1:33ff:fe00:2  NS "); p = str_u(p, n_ns); p = str_cat(p, " NA "); p = str_u(p, n_na_sent);
 		p = str_cat(p, "  ping6 "); p = str_u(p, n_ping6); p = str_cat(p, "  mdns ans "); p = str_u(p, n_mdns_ans);
 		p = str_cat(p, "  SYN "); p = str_u(p, n_syn);
+		p = str_cat(p, "  | ping phone "); p = str_u(p, n_pings_sent); p = str_cat(p, " -> pong "); p = str_u(p, n_pong);
+		p = str_cat(p, "  mdns resp "); p = str_u(p, n_mdns_resp);
 		for (int i = 0; i < 4 && syn_ports[i]; i++) { *p++ = ' '; p = str_u(p, syn_ports[i]); }
 		gfx_text(30, 616, s, &font8x16, 1, n_syn ? 0x40ff60 : 0xffffff);
 		p = str_cat(s, "phone IPv4 "); for (int i = 0; i < 4; i++) { p = str_u(p, phone_ip4[i]); if (i < 3) *p++ = '.'; }
 		p = str_cat(p, "  DHCP requests "); p = str_u(p, n_dhcp_req);
+		p = str_cat(p, "   CarPlay avail x"); p = str_u(p, (uint32_t)n_avail);
+		if (avail_wired >= 0) { p = str_cat(p, " wired="); p = str_u(p, (uint32_t)avail_wired); }
+		p = str_cat(p, " -> start x"); p = str_u(p, (uint32_t)n_start);
 		gfx_text(30, 580, s, &font16x32, 1, 0xa0c0ff);
 		for (int i = 0; i < n_seen; i++)                 /* Q = phone asks, A = phone announces */
 			gfx_text(30 + (i / 4) * 420, 638 + (i % 4) * 20, seen[i], &font8x16, 1, seen[i][0] == 'Q' ? 0xffc040 : 0x40ff60);
@@ -1103,7 +1168,7 @@ int main(void)
 	str_cat(sw_line, "Mac self-test: host 3 s, then device variants");
 	phase = 1;
 	uint32_t shown = 0;
-	for (variant = 0; ; variant = variant < 2 ? variant + 1 : 2) {
+	for (variant = 2; ; variant = 2) {
 		become_device();
 		uint32_t tv = millis(), resets = 0;
 		while (millis() - tv < 8000 || variant == 2 || resets) {
