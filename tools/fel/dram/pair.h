@@ -15,6 +15,7 @@ typedef struct {
 	uint8_t ltsk[64], ltpk[32];        /* our long-term Ed25519 key pair */
 	/* pair-setup */
 	int ps_state;
+	int srp_ready;                     /* pair_prepare() has run for the next pair-setup */
 	srp_server srp;
 	/* the controller (phone) that paired with us */
 	int have_ctrl;
@@ -31,6 +32,8 @@ typedef struct {
 
 /* seed: 32 bytes the long-term key is derived from (fixed per unit) */
 void pair_init(pair_ctx *p, const uint8_t seed[32], const char *id, const char *pin, pair_rng rng);
+/* Precompute the next pair-setup's SRP values (slow: call when idle) */
+void pair_prepare(pair_ctx *p);
 /* One request body in, one response body out. Returns the response length, or -1. */
 int pair_setup(pair_ctx *p, const uint8_t *in, int n, uint8_t *out, int cap);
 int pair_verify(pair_ctx *p, const uint8_t *in, int n, uint8_t *out, int cap);

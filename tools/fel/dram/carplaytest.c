@@ -1125,7 +1125,7 @@ static void dev_rng(uint8_t *o, int n)
 }
 
 /* known-answer self-test: the same inputs give these bytes on the Mac (test/kat_host.c) */
-static int kat_ok = -1; static uint32_t kat_srp_ms;
+static int kat_ok = -1; static uint32_t kat_srp_ms, prep_ms;
 static void crypto_selftest(void)
 {
 	static const uint8_t want_pk[8] = { 0xe4,0x03,0x09,0x98,0xcf,0xd5,0xad,0x17 };
@@ -1159,6 +1159,9 @@ static void pairing_init(void)                      /* long-term key from this c
 	for (int i = 0; i < 32; i++) { pc_hex[2 * i] = hx[pc.ltpk[i] >> 4]; pc_hex[2 * i + 1] = hx[pc.ltpk[i] & 15]; }
 	pc_hex[64] = 0;
 	crypto_selftest();
+	uint32_t t0 = millis();
+	pair_prepare(&pc);
+	prep_ms = millis() - t0;
 }
 
 static void on_ip6(const uint8_t *f, int l)
@@ -1210,6 +1213,7 @@ static void device_poll(void)
 {
 	musb_poll();
 	tcp_poll();
+	if (!pc.srp_ready && pc.ps_state != 2 && txq_n == 0 && millis() - tcp_last_tx > 2000) pair_prepare(&pc);
 	if (notify_pending) {
 		notify_pending = 0;
 		uint8_t sp[16] = { 0xA1, 0x2A, 0, 0, 1, 0, 8, 0 };
@@ -1366,7 +1370,7 @@ static void status(void)
 			gfx_text(30, 124, s, &font16x32, 1, 0xffff60);
 			if (!pair_status[0] && kat_ok >= 0) {
 				p = str_cat(s, kat_ok ? "crypto self-test OK" : "crypto self-test FAILED");
-				p = str_cat(p, "  (SRP B in "); p = str_u(p, kat_srp_ms); p = str_cat(p, " ms)");
+				p = str_cat(p, "  (SRP B in "); p = str_u(p, kat_srp_ms); p = str_cat(p, " ms, prepared in "); p = str_u(p, prep_ms); p = str_cat(p, " ms)");
 				gfx_text(30, 160, s, &font16x32, 1, kat_ok ? 0x40ff60 : 0xff6060);
 			}
 			if (pair_status[0]) {
@@ -1375,9 +1379,6 @@ static void status(void)
 				p = str_cat(p, "  ("); p = str_u(p, pair_ms); p = str_cat(p, " ms)");
 				if (n_enc_rx) { p = str_cat(p, "  encrypted rx "); p = str_u(p, n_enc_rx); }
 				gfx_text(30, 160, s, &font16x32, 1, pc.last_err ? 0xff6060 : 0x40ff60);
-				p = str_cat(s, "M1:"); for (int i = 0; i < pc.m1_len; i++) { *p++ = ' '; p = hexn(p, pc.m1[i], 2); }
-				p = str_cat(p, "   type "); p = str_cat(p, first_ctype);
-				gfx_text(30, 196, s, &font8x16, 1, 0xa0c0ff);
 			}
 		}
 		p = str_cat(s, "phone IPv4 "); for (int i = 0; i < 4; i++) { p = str_u(p, phone_ip4[i]); if (i < 3) *p++ = '.'; }
@@ -1424,6 +1425,7 @@ int main(void)
 	log_reset();
 	if (display_up(FB0)) logf("carplaytest: display failed\n");
 	display_brightness(10);
+	dcache_enable();                                     /* ~10x for the pairing maths; USB is PIO, the screen flushes */
 	__asm__ volatile("csrw mtvec, %0" :: "r"(cp_trap_entry));
 	__asm__ volatile("csrci mstatus, 8\n\tcsrw mie, zero");
 	wr8(POWER, 0x20); udelay(200000);
