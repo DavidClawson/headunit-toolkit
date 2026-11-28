@@ -34,3 +34,10 @@ for n in nals:
         h = hdr(len(frame) + 16, 0)
         stream += h + aead.encrypt(b'\0\0\0\0' + struct.pack('<Q', ctr), frame, h); ctr += 1
 print('VIDEO ->', ' '.join(ask('V ' + stream.hex())), '| sent', ctr, 'frames')
+# a stream restart: a second config, and the phone's counter back at 0
+ctr2 = 0; s2 = hdr(len(avcc) + 8, 1) + b'\0\0\0\0avcC' + avcc
+for n in nals:
+    if n[0] & 31 in (1, 5):
+        frame = struct.pack('>I', len(n)) + n; h = hdr(len(frame) + 16, 0)
+        s2 += h + aead.encrypt(b'\0\0\0\0' + struct.pack('<Q', ctr2), frame, h); ctr2 += 1
+print('RESTART ->', ' '.join(ask('V ' + s2.hex())), '| total sent', ctr + ctr2)

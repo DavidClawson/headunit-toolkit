@@ -1370,6 +1370,7 @@ static void enc_input(tconn *c, const uint8_t *d, int n)
 /* ---- the screen stream: 128-byte header (u32 LE size, opcode) + body ---- */
 static uint8_t sbuf[1 << 20]; static int sb_n;
 static uint64_t sc_ctr;
+static uint32_t v_resync;
 static uint32_t v_cfg, v_frames, v_bad, v_idr, v_bytes, v_first_ms, v_last_size, v_nal_sps;
 static int v_profile = -1, v_level, v_w, v_h;
 
@@ -1405,8 +1406,9 @@ static void sps_size(const uint8_t *s, int n)
 
 static void screen_msg(uint8_t *h, uint8_t *b, int n)
 {
-	if (h[4] == 1) {                                     /* config: avcC, in clear */
+	if (h[4] == 1) {                                     /* config: avcC, in clear; the stream (re)starts */
 		v_cfg++;
+		sc_ctr = 0;                                      /* the phone restarts its frame counter with the stream */
 		const uint8_t *rec = b; int rn = n;
 		for (int i = 0; i + 4 <= n; i++) if (b[i] == 'a' && b[i + 1] == 'v' && b[i + 2] == 'c' && b[i + 3] == 'C') { rec = b + i + 4; rn = n - i - 4; break; }
 		if (rn >= 8 && rec[0] == 1) {
@@ -1421,7 +1423,19 @@ static void screen_msg(uint8_t *h, uint8_t *b, int n)
 		uint8_t nonce[12]; crypto_aead_ctx x;
 		ctr_nonce(nonce, sc_ctr);
 		crypto_aead_init_ietf(&x, scr_key, nonce);
-		if (!scr_keyed || crypto_aead_read(&x, b, b + n - 16, h, 128, b, (size_t)(n - 16))) { v_bad++; return; }
+		if (!scr_keyed) { v_bad++; return; }
+		/* try the expected counter, then a few others to resync (each try leaves b untouched on failure) */
+		static const int64_t tries[] = { 0, 1, 2, -1, 3 };
+		int ok = 0;
+		for (int t = 0; t < 5 && !ok; t++) {
+			int64_t cn_ = (int64_t)sc_ctr + tries[t];
+			if (cn_ < 0) continue;
+			if (t == 1 && sc_ctr != 0) { cn_ = 0; }           /* second try: counter 0 (a restart without config) */
+			ctr_nonce(nonce, (uint64_t)cn_);
+			crypto_aead_init_ietf(&x, scr_key, nonce);
+			if (!crypto_aead_read(&x, b, b + n - 16, h, 128, b, (size_t)(n - 16))) { ok = 1; if (t) v_resync++; sc_ctr = (uint64_t)cn_; }
+		}
+		if (!ok) { v_bad++; return; }
 		sc_ctr++; n -= 16;
 	}
 	if (!v_frames) v_first_ms = millis() - setup110_ms;
@@ -1779,6 +1793,7 @@ static void status(void)
 			if (v_w) { *p++ = ' '; p = str_u(p, (uint32_t)v_w); *p++ = 'x'; p = str_u(p, (uint32_t)v_h); *p = 0; }
 			p = str_cat(p, "  frames "); p = str_u(p, v_frames); p = str_cat(p, " IDR "); p = str_u(p, v_idr);
 			p = str_cat(p, " "); p = str_u(p, v_bytes / 1024); p = str_cat(p, "KB bad "); p = str_u(p, v_bad);
+			if (v_resync) { p = str_cat(p, " resync "); p = str_u(p, v_resync); }
 			if (v_frames) { p = str_cat(p, " first "); p = str_u(p, v_first_ms); p = str_cat(p, "ms"); }
 			gfx_text(30, 404, s, &font16x32, 1, v_frames ? 0x40ff60 : v_bad ? 0xff6060 : 0xffffff);
 		} else if (their_syn_n) {
