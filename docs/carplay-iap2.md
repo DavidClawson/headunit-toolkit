@@ -280,6 +280,130 @@ ordering are inferred from stock's code paths and the public wiomoc flow.
    module's normal session path (`AirPlay session started: …`), with video
    events to the host as in [carplay-host.md](carplay-host.md).
 
+## 5. mDNS and the network side
+
+Static analysis again, added after the first NCM bring-up on the bench. On
+the bench, the phone:
+- queries `_airplay._tcp`, `_raop._tcp` and other services;
+- announces only `_remotepairing._tcp` and `_apple-mobdev2._tcp`;
+- has IPv4 0.0.0.0 and sends DHCP DISCOVERs that nobody answers.
+
+This section is what stock would answer with.
+
+### 5.1 The `_airplay._tcp` registration
+
+Stock makes **exactly one** registration: the only `DNSServiceRegister` call
+in the module (`0xe881ac2c`, called from `0xe88654ae` in
+`_UpdateBonjourAirPlay`). Its arguments:
+
+| Argument | Value | Evidence |
+|---|---|---|
+| Instance name | **`"CarPlay"`**: a constant (`0xe88c8758`), copied by `0xe8864f26`. It is not the car name | confirmed |
+| Type / domain | `_airplay._tcp.` (`0xe88bdaf0`), default domain | confirmed |
+| Interface | index 0 (all interfaces) unless the server's `interfaceName` is set. Nothing sets it, so 0 | confirmed / inferred |
+| Flags | `0x800` | confirmed (raw value) |
+| Port | the AirPlay HTTP/RTSP server's actual listen port (`server+112 → +40`). That server asks for **7000**, falling back to a dynamic port (see 5.5) | confirmed |
+
+TXT record, built in this order by `0xe886507c`:
+
+| Key | Value | Source |
+|---|---|---|
+| `deviceid` | `"00:11:22:AA:BB:CC"` | the vendor's copy-property delegate (`0xe88731f8`) returns this constant for `deviceID` (`0xe889e618`). The server parses it into its 6-byte device ID (`0xe8866668`→`0xe884ba26`). It's a **placeholder, the same in every unit**. The interface MAC is used only if parsing fails |
+| `features` | **`0x4040280,0x21`** | `0xe8864f4e`: the platform's `features` property, ORed with the constant `0x42080805 << 7` = `0x21_04040280`. The vendor delegate doesn't handle `features`, so the platform part is 0. Printed as `0x%X,0x%X` (low word, high word). For comparison, wiomoc advertises `0x44540380,0x21` |
+| `fv` | omitted | only added if `firmwareRevision` is found in `airplay.conf` or the platform. Neither has it: the delegate doesn't handle it, and no `airplay.conf` was found in the NOR dump (not checked exhaustively) |
+| `flags` | **`0x4`** | `statusFlags`: the server's own copy-property returns the number 4 for it (`0xe88639e0`–`0xe88639ea`) |
+| `model` | **`AirPlayGeneric1,1`** | the default (`0xe88c8d58`), because neither `airplay.conf` nor the delegate supplies `model` |
+| `protovers` | omitted | added only if the protocol version isn't `"1.0"`. It is `"1.0"` (`0xe8865246` compares the constant with itself) |
+| `pi` | the pairing identity's identifier (a UUID) | `0xe8864fd4`, from the keychain entry "AirPlay Pairing Identity" in `e:\CarPlay\default.keychain`. **Per-unit**, generated and stored on the unit; value not copied here |
+| `srcvers` | **`320.14`** | `0xe88cbba0` (the tail of `AirPlay/320.14`) |
+
+**No other keys.** Stock has no `pk`, `pw`, `acl`, `btaddr`, `vv`, `gid` or
+`protovers`.
+
+### 5.2 Other registrations
+
+None. `_raop._tcp.`, `_airport._tcp.`, `_mfi-config._tcp.` and `_hap._tcp.`
+appear only in `BonjourBrowser.c`'s type table (`0xe8845628`…`0xe8845afc`),
+used when browsing. They are never registered. Stock browses for exactly one
+service type: `_carplay-ctrl._tcp` (CarPlayControlClient).
+
+### 5.3 Network set-up
+
+- **IPv4:** static **192.168.31.160/24**, gateway .1 (`0xe88835f8`).
+  - lwIP's DHCP client and AutoIP are compiled in, but nothing reachable calls
+    `dhcp_start`/`autoip_start`. The DHCP functions are reached only from
+    lwIP's timer and receive callbacks (inferred).
+  - **There is no DHCP server** anywhere (no lwIP or vendor DHCP-server code
+    or strings).
+  - So stock never answers the phone's DISCOVERs either, and the phone stays
+    without a routable IPv4 address on the link. The working path must be
+    **IPv6 link-local** (inferred, but consistent with the bench).
+- **The MAC on NCM frames is lwIP's netif hardware address.** The netif init
+  `0xe8883694` stores it as a code constant: 6 bytes written at `netif+260`,
+  the same in every unit.
+  - It is **not** the gadget's iMACAddress string (string 7), and not the
+    AirPlay `deviceid`.
+  - The netif name is `"us"`, MTU 1500, and the flags byte is `0x52`.
+- **The IPv6 link-local address** is `fe80::` plus the EUI-64 of that netif
+  MAC: first byte XOR `0x02`, `ff:fe` inserted (`0xe888eaf6`, called with
+  "from MAC" = 1, right after `netif_add`).
+- **mDNS (mDNSResponder/mDNSPosix on lwIP, port 5353):**
+  - `mDNSPlatformInit` (`0xe88304e8`…) opens unicast sockets for both AF_INET
+    and AF_INET6.
+  - Per interface, it also sets up the IPv6 multicast socket
+    (`IPV6_JOIN_GROUP`) when the interface reports an AF_INET6 address
+    (`0xe883044c`). So it can answer over **IPv4 and IPv6**. Whether lwIP's
+    interface list reports the fe80 address isn't traced.
+  - **Hostname:** the host label is set to the literal **`"Computer"`**
+    (`0xe8830568`–`0xe8830588`; no `gethostname` call). So the records are
+    `Computer.local`, with an A record for 192.168.31.160 and an AAAA record
+    for the fe80 address. On a name conflict, mDNS renames it to
+    `Computer-2` and so on. Confirmed that the label is set; not traced
+    whether later code renames it.
+
+### 5.4 Order of events
+
+1. **MIoctrl 1** (module init, `0xe887b970`), before any phone is attached:
+   - `lib_net_init`: lwIP plus the netif, which is set up straight away;
+   - mDNS init (`0xe88129b6`);
+   - `lib_iap_init`;
+   - `0xe8873d8a`, which starts **`AirPlayThread`** (`0xe8872f98`). That
+     thread:
+     - creates the AirPlay receiver server with the vendor delegate;
+     - creates `CarPlayControlClient` (browse callback `0xe8872d9c`);
+     - sends `startServer`, which opens the HTTP server and **registers
+       `_airplay._tcp`**;
+     - starts the `_carplay-ctrl._tcp` browse (`0xe8872d06`).
+2. So the registration exists **before** USB/NCM link-up. Nothing
+   re-registers on link-up. The module has no link-state input; it only gets
+   frames via MIoctrl 13, and the host drops outgoing frames until NCM is up.
+   Once alt 1 is selected, mDNSResponder's normal query answering and
+   periodic announcements reach the phone.
+3. **When the phone's `_carplay-ctrl._tcp` appears**, the browse callback
+   (`Adding CarPlayController`) calls `CarPlayControlClientConnect` up to 5
+   times, which sends `GET /ctrl-int/1/connect` (§4).
+4. Stock doesn't depend on `_carplay-ctrl` to be found. Its `_airplay._tcp`
+   service is answerable whenever the phone asks, and the phone is already
+   asking. The bench phone hasn't advertised `_carplay-ctrl` yet. Whether
+   iOS connects as soon as it resolves `_airplay._tcp`, or needs the
+   `ctrl-int` request first, is open.
+
+### 5.5 Listening sockets
+
+| Socket | Proto | Port | Evidence |
+|---|---|---|---|
+| AirPlay HTTP/RTSP server (`/info`, `pair-setup`, `pair-verify`, `auth-setup`, `SETUP`, `RECORD`, …) | TCP, IPv4 + IPv6 | **7000** if free, else dynamic. `server+220 = -7000` (`0xe8864e68`), passed to `ServerSocketPairOpen` (`0xe88514f4`), where negative means "try this port, then any" | confirmed |
+| mDNS | UDP, v4 + v6 | 5353 | confirmed |
+| Timing | UDP | dynamic | `0xe8869522`, "Timing set up on port %d" |
+| Screen (H.264) stream | TCP | dynamic | `0xe886a1b6`, "screen receiver set up on port %d" |
+| Audio data / RTCP | UDP | dynamic | `0xe886a5f0`, `0xe886ad6c`, `0xe886adb4` |
+| Keep-alive | UDP | dynamic | `0xe886d85e` |
+| Events | TCP | dynamic | `0xe886d8d6` |
+
+Only port 7000 is fixed. The phone's first TCP SYN should go to **port 7000**
+(the SRV record's port). Every other port is created during `SETUP` and sent
+to the phone in the `SETUP` response.
+
 ## What's still unknown, and the cheapest bench test
 
 1. **Does iOS accept stock's `1D01` from our firmware?** Cheapest: answer
@@ -306,3 +430,16 @@ ordering are inferred from stock's code paths and the public wiomoc flow.
    whether the phone uses IPv6 link-local or IPv4, and the port of its
    `_carplay-ctrl` service. That decides what our IP side (or the hosted
    `carplay.mod`'s lwIP) must answer first.
+   The bench answered part of this: the phone queries `_airplay._tcp` and
+   gets no IPv4 address.
+5. **Will the phone connect once `_airplay._tcp` is answered?** Cheapest:
+   answer the phone's `_airplay._tcp` PTR query over IPv6 link-local, using
+   §5's values:
+   - PTR `CarPlay._airplay._tcp.local`;
+   - SRV `Computer.local:7000`;
+   - TXT `deviceid`/`features=0x4040280,0x21`/`flags=0x4`/`model`/`pi`/`srcvers=320.14`,
+     with our own `pi` UUID;
+   - AAAA for our fe80 address.
+
+   Then log the first TCP SYN. A SYN to port 7000 means the next step is
+   AirPlay `/info` and pairing.
