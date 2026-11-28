@@ -1002,7 +1002,9 @@ iPhone:
 | NCM link | done | phone selects alt 1; DHCP and mDNS traffic |
 | Our side of the link | done | IPv6 link-local, ND, mDNS `_airplay._tcp` (see below) |
 | CarPlay start (`0x4300`/`0x4301`) | done | phone connects to our port 7000 |
-| AirPlay/CarPlay session | next | `POST /pair-setup` arrives; pairing, MFi-SAP, H.264, audio |
+| Pairing (pair-setup, pair-verify) | done | SRP-6a 3072, Ed25519, X25519; our own code + Monocypher |
+| Encrypted control channel, MFi-SAP | done | phone accepts the chip's signature |
+| CarPlay session (SETUP, RECORD, streams) | next | binary plists; screen stream; H.264 |
 
 The last two rows are where hosting stock's `carplay.mod` (the chosen
 direction, `docs/carplay-host.md`) or a large amount of our own code comes
@@ -1070,3 +1072,29 @@ that secret (`docs/carplay-hosting-plan.md` §1). We write our own receiver.
 and ChaCha20-Poly1305, then `pair-verify` (X25519), then MFi-SAP signed by
 our MFi chip. That needs a bignum modexp and a small crypto library, a real
 step up from the bench tests so far.
+
+## 2026-11-27 (late): paired, authenticated, and the phone asks for a session
+
+Our own receiver code now gets through everything before the session itself:
+
+| Step | Result on the bench |
+|---|---|
+| pair-setup M1–M6 (SRP-6a, PIN 3939) | phone's PIN proof accepted, long-term keys exchanged |
+| pair-verify (X25519, Ed25519) | VERIFIED in 37 ms |
+| encrypted control channel | phone's frames decrypt, ours are accepted (0 bad) |
+| auth-setup (MFi-SAP) | MFi chip signs SHA-256 of the session keys in 472 ms; phone accepts |
+| next request | `SETUP rtsp://fe80::f1:33ff:fe00:2/…` (binary plist) |
+
+**What it took:**
+- `bn.c`: a 3072-bit Montgomery bignum, written for this project.
+- `srp.c`: SRP-6a, with its group prime checked against RFC 3526's formula.
+- `pair.c`: TLV8 pair-setup and pair-verify.
+- `hashes.c`: SHA-1, SHA-256 and AES-128-CTR.
+- Monocypher 4.0.2, vendored unmodified (BSD-2/CC0), for X25519, Ed25519, SHA-512/HKDF and ChaCha20-Poly1305.
+- Each piece is tested on the Mac against independent Python implementations (`tools/fel/dram/test/`). There's also a known-answer self-test on the device.
+
+**Two lessons:**
+- **The D-cache.** The first on-device pairing took **6 s** for one SRP step, and the phone gave up. Under FEL the D-cache is off. With `dcache_enable()` (USB here is PIO, and the screen already flushes), plus precomputing the SRP verifier at boot, pair-verify takes 37 ms.
+- **The phone's first pair-setup message** is `00 01 00 06 01 01` (method 0, state 1, no transient flag), sent as `application/x-apple-binary-plist` even though the body is TLV8.
+
+**Next:** SETUP / RECORD (binary plists), then the screen stream and H.264.
