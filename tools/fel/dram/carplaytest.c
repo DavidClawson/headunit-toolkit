@@ -614,6 +614,113 @@ static void iap2_poll(void)
 	if (ls == 3 && millis() - ls_at > 1500 && syn_tries < 6) send_syn();
 }
 
+/* ---- read-only mDNS decoding (what the phone announces and asks for) ----
+   Only service-type names (labels starting with '_') are kept: instance names can
+   contain the phone's name and are never stored or shown. */
+#define NSEEN 12
+static char seen[NSEEN][44];
+static int n_seen;
+static uint32_t n_dhcp_req;
+static uint8_t phone_ip4[4];
+
+static int dns_name(const uint8_t *msg, int mlen, int off, char *out, int max, int *end)
+{
+	int k = 0, jumped = 0, hops = 0;
+	out[0] = 0;
+	while (off < mlen && hops++ < 32) {
+		int l = msg[off];
+		if (l == 0) { off++; break; }
+		if ((l & 0xC0) == 0xC0) {
+			if (off + 1 >= mlen) return -1;
+			if (!jumped && end) *end = off + 2;
+			jumped = 1;
+			off = (l & 0x3F) << 8 | msg[off + 1];
+			continue;
+		}
+		off++;
+		if (off + l > mlen) return -1;
+		if (k && k < max - 1) out[k++] = '.';
+		for (int i = 0; i < l && k < max - 1; i++) { uint8_t c = msg[off + i]; out[k++] = (c >= 32 && c < 127) ? (char)c : '?'; }
+		off += l;
+	}
+	out[k] = 0;
+	if (!jumped && end) *end = off;
+	return 0;
+}
+
+/* keep the part of a name from its first label that starts with '_' ("_carplay-ctrl._tcp.local") */
+static const char *svc_part(const char *n)
+{
+	if (n[0] == '_') return n;
+	for (const char *p = n; *p; p++) if (p[0] == '.' && p[1] == '_') return p + 1;
+	return 0;
+}
+
+static void remember(char kind, const char *svc, const char *what, int port)
+{
+	char e[44], *p = e;
+	*p++ = kind; *p++ = ' ';
+	for (const char *s = svc; *s && p < e + 28; s++) *p++ = *s;
+	*p++ = ' ';
+	for (const char *s = what; *s && p < e + 36; s++) *p++ = *s;
+	if (port >= 0) { *p++ = ' '; p = str_u(p, (uint32_t)port); }
+	*p = 0;
+	for (int i = 0; i < n_seen; i++) { const char *a = seen[i], *b = e; while (*a && *a == *b) { a++; b++; } if (!*a && !*b) return; }
+	if (n_seen < NSEEN) { char *d = seen[n_seen++]; for (const char *s = e; (*d++ = *s++); ) ; }
+}
+
+static const char *rtype(int ty) { return ty == 12 ? "PTR" : ty == 33 ? "SRV" : ty == 16 ? "TXT" : ty == 1 ? "A" : ty == 28 ? "AAAA" : ty == 255 ? "ANY" : "?"; }
+
+static void on_mdns(const uint8_t *m, int n)
+{
+	if (n < 12) return;
+	int qd = m[4] << 8 | m[5], rr = (m[6] << 8 | m[7]) + (m[8] << 8 | m[9]) + (m[10] << 8 | m[11]);
+	int off = 12;
+	char nm[96];
+	for (int i = 0; i < qd && off < n; i++) {           /* questions: what the phone looks for */
+		int end;
+		if (dns_name(m, n, off, nm, sizeof nm, &end)) return;
+		off = end;
+		if (off + 4 > n) return;
+		const char *s = svc_part(nm);
+		if (s) remember('Q', s, rtype(m[off] << 8 | m[off + 1]), -1);
+		off += 4;
+	}
+	for (int i = 0; i < rr && off < n; i++) {           /* answers: what the phone announces */
+		int end;
+		if (dns_name(m, n, off, nm, sizeof nm, &end)) return;
+		off = end;
+		if (off + 10 > n) return;
+		int ty = m[off] << 8 | m[off + 1], rdl = m[off + 8] << 8 | m[off + 9];
+		off += 10;
+		if (off + rdl > n) return;
+		const char *s = svc_part(nm);
+		if (s && s[0] == '_' && !(s[1] == 's' && s[2] == 'e' && s[3] == 'r')) {   /* skip _services._dns-sd */
+			if (ty == 33 && rdl >= 6) remember('A', s, "SRV", m[off + 4] << 8 | m[off + 5]);
+			else if (ty == 12 || ty == 16) remember('A', s, rtype(ty), -1);
+		} else if (ty == 12 && s) {                        /* _services._dns-sd._udp PTR -> a service type */
+			char tg[96];
+			if (!dns_name(m, n, off, tg, sizeof tg, 0) && tg[0] == '_') remember('A', tg, "type", -1);
+		}
+		off += rdl;
+	}
+}
+
+static void on_frame(const uint8_t *f, int l, uint16_t ty)
+{
+	const uint8_t *u = 0; int ul = 0;
+	if (ty == 0x86DD && l >= 14 + 40 + 8 && f[20] == 17) { u = f + 54; ul = (f[18] << 8 | f[19]); }
+	else if (ty == 0x0800 && l >= 14 + 20 + 8 && f[23] == 17) {
+		int ih = (f[14] & 15) * 4;
+		u = f + 14 + ih; ul = (f[16] << 8 | f[17]) - ih;
+		if (f[26] || f[27] || f[28] || f[29]) for (int i = 0; i < 4; i++) phone_ip4[i] = f[26 + i];
+	}
+	if (!u || ul < 8 || u + ul > f + l) return;
+	int dp = u[2] << 8 | u[3];
+	if (dp == 5353) on_mdns(u + 8, ul - 8);
+	if (dp == 67) n_dhcp_req++;
+}
+
 static void device_poll(void)
 {
 	musb_poll();
@@ -649,6 +756,7 @@ static void device_poll(void)
 						if (ty == 0x86DD && l >= 14 + 40 && f[20] == 58) n_icmp6++;
 						if (up >= 0 && up != ports[0]) { for (int j = 3; j > 0; j--) ports[j] = ports[j - 1]; ports[0] = (uint16_t)up; }
 						if (up == 5353) n_mdns++;
+						on_frame(f, l, ty);
 					}
 			} else if (nl) n_ntb_bad++;
 			nl = 0;
@@ -736,13 +844,11 @@ static void status(void)
 		p = str_cat(p, " udp"); for (int i = 0; i < 4; i++) { *p++ = ' '; p = str_u(p, ports[i]); }
 		p = str_cat(p, "  mdns "); p = str_u(p, n_mdns); p = str_cat(p, " icmp6 "); p = str_u(p, n_icmp6);
 		gfx_text(30, 544, s, &font16x32, 1, n_frames ? 0x40ff60 : 0xffffff);
-		uint8_t rq[6][8];                                /* the phone's recent requests to us */
-		int n = musb_recent(rq, 6);
-		for (int i = 0; i < n; i++) {
-			p = s; for (int j = 0; j < 8; j++) { p = hexn(p, rq[i][j], 2); *p++ = ' '; *p = 0; }
-			gfx_text(30 + i * 480, 580, s, &font16x32, 1, 0xa0c0ff);
-			if (i == 1) break;
-		}
+		p = str_cat(s, "phone IPv4 "); for (int i = 0; i < 4; i++) { p = str_u(p, phone_ip4[i]); if (i < 3) *p++ = '.'; }
+		p = str_cat(p, "  DHCP requests "); p = str_u(p, n_dhcp_req);
+		gfx_text(30, 580, s, &font16x32, 1, 0xa0c0ff);
+		for (int i = 0; i < n_seen; i++)                 /* Q = phone asks, A = phone announces */
+			gfx_text(30 + (i / 4) * 420, 616 + (i % 4) * 26, seen[i], &font8x16, 1, seen[i][0] == 'Q' ? 0xffc040 : 0x40ff60);
 	}
 	dcache_flush();
 	display_flip(fb);

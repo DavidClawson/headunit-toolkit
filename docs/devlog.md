@@ -1009,3 +1009,22 @@ direction, `docs/carplay-host.md`) or a large amount of our own code comes
 in. Everything above them is now ours and understood. It is also the part
 the module expects its host to provide: the USB gadget, the role switch, and
 the iAP2 and NCM transport (`MIoctrl` 13).
+
+**What the iPhone does on the CarPlay link (2026-11-27).** `carplaytest.c`
+now decodes mDNS on the NCM link, read-only. It keeps only service-type
+names: instance names can contain the phone's name and are never stored or
+shown.
+
+About 30 s after NCM comes up, the phone:
+- **queries (looks for):** `_airplay._tcp`, `_raop._tcp`, `_airplay-bds._tcp`,
+  `_companion-link._tcp`, `_rdlink._tcp`, `_hap._tcp`, `_hap._udp`, and `ANY`
+  for `_remotepairing._tcp` and `_apple-mobdev2._tcp`;
+- **announces:** `_remotepairing._tcp` and `_apple-mobdev2._tcp` (SRV records
+  with high ephemeral ports). It doesn't announce `_carplay-ctrl._tcp` yet,
+  presumably until it finds an AirPlay receiver;
+- **IPv4:** sends DHCP DISCOVERs from `0.0.0.0` (5 in 30 s; nobody answers)
+  and ARP. It also uses IPv6.
+
+**Next:** answer as stock does. That means an IPv6 link-local address with
+neighbour advertisements, and an mDNS response for `_airplay._tcp` with
+stock's TXT record. Then watch for the phone's TCP connection.
