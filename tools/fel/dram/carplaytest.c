@@ -20,6 +20,7 @@
 #include "twi.h"
 #include "pair.h"
 #include "hashes.h"
+#include "bplist.h"
 #include "third_party/monocypher/monocypher.h"
 #include "third_party/monocypher/monocypher-ed25519.h"
 
@@ -926,102 +927,129 @@ static void ask_phone(void)                                 /* mDNS query: _remo
 	send6(0, mdns6, 17, ul);
 }
 
-/* TCP, one connection on the AirPlay port, and the RTSP requests on it.
-   Pairing requests go to pair.c; anything else is only recorded. Only request
-   lines and our own status are shown (headers can carry phone identifiers). */
-static int tcp_state;                     /* 0 listen, 1 SYN received, 2 established, 3 closed by peer */
-static uint8_t tcp_peer_mac[6], tcp_peer[16];
-static uint16_t tcp_pport;
-static uint32_t tcp_iss = 0x0F133000, tcp_snd_una, tcp_snd_nxt, tcp_rcv_nxt, tcp_rx_bytes, n_conn, n_fin, n_rst_in;
-static uint32_t tcp_last_tx, n_retx;
-static uint8_t txq[8192]; static int txq_n;          /* sent or queued, not yet acknowledged; starts at snd_una */
-static uint8_t rq[8192]; static int rq_n;            /* received request bytes not yet handled */
-static char req_lines[2][72]; static int n_req;      /* last two request lines */
-static uint32_t n_enc_rx;                            /* bytes after pair-verify (encrypted channel) */
+/* The CarPlay receiver's network side (docs/carplay-pairing.md, docs/carplay-session.md):
+   TCP connections on a few fixed ports, RTSP on the control and event channels, the
+   screen stream, and NTP-style timing over UDP. Only request lines, plist key names and
+   our own status are shown: bodies and headers can carry phone identifiers. */
+enum { C_CTRL, C_EVT, C_SCR, NCONN };
+#define EVENT_PORT     7001
+#define SCREEN_PORT    7002
+#define TIMING_PORT    7010
+#define KEEPALIVE_PORT 7011
+static const uint16_t c_port[NCONN] = { AP_PORT, EVENT_PORT, SCREEN_PORT };
+
+typedef struct {
+	int state;                     /* 0 listen, 1 SYN received, 2 established, 3 closed by peer */
+	uint8_t mac[6], ip[16];
+	uint16_t pport, win;
+	uint32_t iss, una, nxt, rcv, rx, conns, fins, rsts, last_tx, retx;
+	uint8_t txq[16384]; int txq_n; /* sent or queued, not yet acknowledged; starts at una */
+	int enc;                       /* encrypted RTSP framing (control after pair-verify; events) */
+	uint8_t kr[32], kw[32]; uint64_t rc, wc;
+	uint8_t eb[0x4000 + 64]; int eb_n;
+	uint8_t rq[8192]; int rq_n;    /* plaintext request bytes not yet handled */
+	uint32_t ef_in, ef_bad, ef_out;
+} tconn;
+static tconn cn[NCONN];
+
+static char req_lines[2][72]; static int n_req;      /* last two control request lines */
+static char req_log[96]; static int req_log_n;       /* short tags of the session requests, in order */
+static uint32_t n_enc_rx;
 static const char *pair_status = "";
-static int ps_last, pv_last;                         /* last pairing step reached */
+static int ps_last, pv_last;
 static uint32_t pair_ms;
-static char first_ctype[40];                             /* time spent in the last pairing step */
+static char first_ctype[40];
 
 static int s_eq(const char *a, const char *b) { while (*a && *a == *b) { a++; b++; } return *a == *b; }
+static int s_starts(const char *a, const char *b) { while (*b && *a == *b) { a++; b++; } return *b == 0; }
 static void mmove(uint8_t *d, const uint8_t *s, int n) { for (int i = 0; i < n; i++) d[i] = s[i]; }   /* d < s only */
+static void log_tag(const char *t)
+{
+	if (req_log_n > (int)sizeof req_log - 12) return;
+	if (req_log_n) req_log[req_log_n++] = ' ';
+	while (*t && req_log_n < (int)sizeof req_log - 1) req_log[req_log_n++] = *t++;
+	req_log[req_log_n] = 0;
+}
 
-static void tcp_seg(uint8_t flags, uint32_t seq, const uint8_t *d, int n, int mss)
+static void tcp_seg(tconn *c, uint8_t flags, uint32_t seq, const uint8_t *d, int n, int mss)
 {
 	uint8_t *p = tx6 + 54;
 	int hl = mss ? 24 : 20;
+	uint16_t lp = c_port[c - cn];
 	memset(p, 0, (size_t)hl);
-	p[0] = (uint8_t)(AP_PORT >> 8); p[1] = (uint8_t)AP_PORT; p[2] = (uint8_t)(tcp_pport >> 8); p[3] = (uint8_t)tcp_pport;
-	uint32_t a = tcp_rcv_nxt;
+	p[0] = (uint8_t)(lp >> 8); p[1] = (uint8_t)lp; p[2] = (uint8_t)(c->pport >> 8); p[3] = (uint8_t)c->pport;
+	uint32_t a = c->rcv;
 	p[4] = (uint8_t)(seq >> 24); p[5] = (uint8_t)(seq >> 16); p[6] = (uint8_t)(seq >> 8); p[7] = (uint8_t)seq;
 	p[8] = (uint8_t)(a >> 24); p[9] = (uint8_t)(a >> 16); p[10] = (uint8_t)(a >> 8); p[11] = (uint8_t)a;
-	p[12] = (uint8_t)(hl / 4 << 4); p[13] = flags; p[14] = 0x20; p[15] = 0x00;   /* window 8192 */
+	p[12] = (uint8_t)(hl / 4 << 4); p[13] = flags; p[14] = (uint8_t)(c->win >> 8); p[15] = (uint8_t)c->win;
 	if (mss) { p[20] = 2; p[21] = 4; p[22] = (uint8_t)(1400 >> 8); p[23] = (uint8_t)(1400 & 255); }
 	if (n) memcpy(p + hl, d, (size_t)n);
-	send6(tcp_peer_mac, tcp_peer, 6, hl + n);
+	send6(c->mac, c->ip, 6, hl + n);
 }
 
-static void tcp_flush(int from_una)                 /* send queued data (all of it again after a timeout) */
+static void tcp_flush(tconn *c, int from_una)       /* send queued data (all of it again after a timeout) */
 {
-	uint32_t start = from_una ? tcp_snd_una : tcp_snd_nxt;
-	int off = (int)(start - tcp_snd_una);
-	while (off < txq_n) {
-		int n = txq_n - off; if (n > 1400) n = 1400;
-		tcp_seg(off + n == txq_n ? 0x18 : 0x10, tcp_snd_una + (uint32_t)off, txq + off, n, 0);   /* PSH on the last */
+	uint32_t start = from_una ? c->una : c->nxt;
+	int off = (int)(start - c->una);
+	while (off < c->txq_n) {
+		int n = c->txq_n - off; if (n > 1400) n = 1400;
+		tcp_seg(c, off + n == c->txq_n ? 0x18 : 0x10, c->una + (uint32_t)off, c->txq + off, n, 0);
 		off += n;
 	}
-	tcp_snd_nxt = tcp_snd_una + (uint32_t)txq_n;
-	tcp_last_tx = millis();
+	c->nxt = c->una + (uint32_t)c->txq_n;
+	c->last_tx = millis();
 }
 
-static void tcp_write(const void *d, int n)
+static void tcp_write(tconn *c, const void *d, int n)
 {
-	if (txq_n + n > (int)sizeof txq) return;
-	memcpy(txq + txq_n, d, (size_t)n); txq_n += n;
-	tcp_flush(0);
+	if (c->txq_n + n > (int)sizeof c->txq) return;
+	memcpy(c->txq + c->txq_n, d, (size_t)n); c->txq_n += n;
+	tcp_flush(c, 0);
 }
 
 static void tcp_poll(void)                          /* retransmit after 300 ms without an ACK */
 {
-	if (tcp_state == 2 && txq_n && millis() - tcp_last_tx > 300) { n_retx++; tcp_flush(1); }
+	for (int i = 0; i < NCONN; i++) {
+		tconn *c = &cn[i];
+		if (c->state == 2 && c->txq_n && millis() - c->last_tx > 300) { c->retx++; tcp_flush(c, 1); }
+	}
 }
 
-/* the encrypted control channel after pair-verify (docs/carplay-pairing.md):
-   frames of [u16 LE length = AAD][ChaCha20-Poly1305 ciphertext][16-byte tag],
+/* encrypted RTSP framing: [u16 LE length = AAD][ChaCha20-Poly1305 ciphertext][16-byte tag],
    nonce = 4 zero bytes + 64-bit LE counter per direction */
-static int enc_on;
-static uint8_t ck_read[32], ck_write[32];
-static uint64_t rd_ctr, wr_ctr;
-static uint8_t eb[0x4000 + 64]; static int eb_n;     /* encrypted bytes not yet decrypted */
-static uint32_t n_ef_in, n_ef_bad, n_ef_out;
-static void enc_start(void)
+static void ctr_nonce(uint8_t n[12], uint64_t c) { for (int i = 0; i < 4; i++) n[i] = 0; for (int i = 0; i < 8; i++) n[4 + i] = (uint8_t)(c >> (8 * i)); }
+static void hk(uint8_t out[32], const char *salt, const char *info)   /* HKDF over the session secret */
 {
 	const uint8_t *sec = pc.transient ? pc.srp.K : pc.pv_shared;
-	int sl = pc.transient ? 64 : 32;
-	crypto_sha512_hkdf(ck_read, 32, sec, (size_t)sl, (const uint8_t *)"Control-Salt", 12, (const uint8_t *)"Control-Write-Encryption-Key", 28);
-	crypto_sha512_hkdf(ck_write, 32, sec, (size_t)sl, (const uint8_t *)"Control-Salt", 12, (const uint8_t *)"Control-Read-Encryption-Key", 27);
-	rd_ctr = wr_ctr = 0; eb_n = 0; enc_on = 1;
+	int sl = pc.transient ? 64 : 32, s = 0, i = 0;
+	while (salt[s]) s++;
+	while (info[i]) i++;
+	crypto_sha512_hkdf(out, 32, sec, (size_t)sl, (const uint8_t *)salt, (size_t)s, (const uint8_t *)info, (size_t)i);
 }
-static void ctr_nonce(uint8_t n[12], uint64_t c) { for (int i = 0; i < 4; i++) n[i] = 0; for (int i = 0; i < 8; i++) n[4 + i] = (uint8_t)(c >> (8 * i)); }
-
-static void send_maybe_enc(const uint8_t *d, int n)
+static void enc_start(tconn *c, const char *salt, const char *rd_info, const char *wr_info)
 {
-	if (!enc_on) { tcp_write(d, n); return; }
+	hk(c->kr, salt, rd_info); hk(c->kw, salt, wr_info);
+	c->rc = c->wc = 0; c->eb_n = 0; c->enc = 1;
+}
+
+static void send_maybe_enc(tconn *c, const uint8_t *d, int n)
+{
+	if (!c->enc) { tcp_write(c, d, n); return; }
 	static uint8_t fr[0x4000 + 18];
 	while (n > 0) {
 		int k = n > 0x4000 ? 0x4000 : n;
 		uint8_t nonce[12]; crypto_aead_ctx x;
 		fr[0] = (uint8_t)k; fr[1] = (uint8_t)(k >> 8);
-		ctr_nonce(nonce, wr_ctr++);
-		crypto_aead_init_ietf(&x, ck_write, nonce);
+		ctr_nonce(nonce, c->wc++);
+		crypto_aead_init_ietf(&x, c->kw, nonce);
 		crypto_aead_write(&x, fr + 2, fr + 2 + k, fr, 2, d, (size_t)k);
-		tcp_write(fr, 2 + k + 16);
-		n_ef_out++;
+		tcp_write(c, fr, 2 + k + 16);
+		c->ef_out++;
 		d += k; n -= k;
 	}
 }
 
-static void respond_t(const char *proto, const char *cseq, const char *ctype, const uint8_t *body, int n)
+static void respond_t(tconn *c, const char *proto, const char *cseq, const char *ctype, const uint8_t *body, int n)
 {
 	static char h[256];
 	char *q = str_cat(h, proto); q = str_cat(q, " 200 OK\r\nContent-Length: ");
@@ -1029,16 +1057,13 @@ static void respond_t(const char *proto, const char *cseq, const char *ctype, co
 	if (n) { q = str_cat(q, "\r\nContent-Type: "); q = str_cat(q, ctype); }
 	if (cseq[0]) { q = str_cat(q, "\r\nCSeq: "); q = str_cat(q, cseq); }
 	q = str_cat(q, "\r\nServer: AirTunes/320.14\r\n\r\n");
-	static uint8_t all[4096];
+	static uint8_t all[12288];
 	int hl = (int)(q - h);
 	if (hl + n > (int)sizeof all) return;
 	memcpy(all, h, (size_t)hl); if (n) memcpy(all + hl, body, (size_t)n);
-	send_maybe_enc(all, hl + n);
+	send_maybe_enc(c, all, hl + n);
 }
-static void respond(const char *proto, const char *cseq, const uint8_t *body, int n)
-{
-	respond_t(proto, cseq, "application/pairing+tlv8", body, n);
-}
+#define PLIST "application/x-apple-binary-plist"
 
 static void dev_rng(uint8_t *o, int n);
 /* auth-setup (MFi-SAP): prove the MFi chip is present, bound to this session's X25519 keys */
@@ -1073,7 +1098,149 @@ static int auth_setup(const uint8_t *body, int n, uint8_t *out, int cap)
 	return o;
 }
 
-static void enc_input(const uint8_t *d, int n);
+/* ---- the session (docs/carplay-session.md) ---- */
+#define DISPLAY_UUID "f1330000-0000-4000-8000-000000000110"
+#define HID_UUID     "2a2a2a2a"
+static uint8_t scr_key[32]; static int scr_keyed;
+static uint32_t setup110_ms;
+static int sess_setup1, n_info, n_record, n_cmd, n_feedback, n_s110, n_other;
+static uint32_t n_timing, n_keepalive;
+static char phone_feats[64];                         /* how many features the phone offered, and a few names */
+
+/* a 2-finger touch screen: per finger contact id (8), tip (1) + pad (7), X (16), Y (16) */
+static const uint8_t hid_desc[] = {
+	0x05, 0x0D, 0x09, 0x04, 0xA1, 0x01,               /* Digitizer, Touch Screen, Collection (Application) */
+#define FINGER \
+	0x09, 0x22, 0xA1, 0x02,                           /* Finger, Collection (Logical) */ \
+	0x09, 0x51, 0x15, 0x00, 0x25, 0x7F, 0x75, 0x08, 0x95, 0x01, 0x81, 0x02,   /* Contact Identifier */ \
+	0x09, 0x42, 0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x01, 0x81, 0x02,   /* Tip Switch */ \
+	0x75, 0x07, 0x95, 0x01, 0x81, 0x03,               /* padding */ \
+	0x05, 0x01, 0x09, 0x30, 0x15, 0x00, 0x26, 0x00, 0x05, 0x75, 0x10, 0x95, 0x01, 0x81, 0x02,   /* X 0..1280 */ \
+	0x09, 0x31, 0x26, 0xD0, 0x02, 0x81, 0x02,         /* Y 0..720 */ \
+	0x05, 0x0D, 0xC0
+	FINGER, FINGER,
+#undef FINGER
+	0xC0,
+};
+
+static int info_plist(uint8_t *out, int cap)
+{
+	bp_reset();
+	int r = bp_new_dict(24);
+	bp_set(r, "sourceVersion", bp_new_str("320.14"));
+	bp_set(r, "features", bp_new_int((int64_t)(0x615653AEE2ull & ~0x10004540A00ull)));   /* audio bits cleared */
+	bp_set(r, "statusFlags", bp_new_int(4));
+	bp_set(r, "model", bp_new_str("Linux"));
+	bp_set(r, "manufacturer", bp_new_str(ACC_NAME));
+	bp_set(r, "name", bp_new_str(ACC_NAME));
+	bp_set(r, "deviceID", bp_new_str("02:f1:33:00:00:02"));
+	int bt = bp_new_array(1); bp_push(bt, bp_new_str("02:f1:33:00:00:03")); bp_set(r, "bluetoothIDs", bt);
+	bp_set(r, "keepAliveLowPower", bp_new_bool(1));
+	bp_set(r, "keepAliveSendStatsAsBody", bp_new_bool(0));
+	bp_set(r, "rightHandDrive", bp_new_bool(0));
+	bp_set(r, "nightMode", bp_new_bool(0));
+	/* modes: the screen (1) and main audio (2) resources, and three app states */
+	int modes = bp_new_dict(2), res = bp_new_array(2), apps = bp_new_array(3);
+	for (int id = 1; id <= 2; id++) {
+		int d = bp_new_dict(6);
+		bp_set(d, "resourceID", bp_new_int(id)); bp_set(d, "transferType", bp_new_int(1)); bp_set(d, "transferPriority", bp_new_int(100));
+		bp_set(d, "takeConstraint", bp_new_int(100)); bp_set(d, "borrowConstraint", bp_new_int(100)); bp_set(d, "unborrowConstraint", bp_new_int(100));
+		bp_push(res, d);
+	}
+	int a2 = bp_new_dict(2); bp_set(a2, "appStateID", bp_new_int(2)); bp_set(a2, "state", bp_new_bool(0)); bp_push(apps, a2);
+	int a1 = bp_new_dict(2); bp_set(a1, "appStateID", bp_new_int(1)); bp_set(a1, "speechMode", bp_new_int(-1)); bp_push(apps, a1);
+	int a3 = bp_new_dict(2); bp_set(a3, "appStateID", bp_new_int(3)); bp_set(a3, "state", bp_new_bool(0)); bp_push(apps, a3);
+	bp_set(modes, "resources", res); bp_set(modes, "appStates", apps);
+	bp_set(r, "modes", modes);
+	int ext = bp_new_array(2); bp_push(ext, bp_new_str("vocoderInfo")); bp_push(ext, bp_new_str("enhancedRequestCarUI"));
+	bp_set(r, "extendedFeatures", ext);
+	/* the display: 1280x720, one full-screen view area */
+	int disp = bp_new_array(1), d = bp_new_dict(16);
+	bp_set(d, "uuid", bp_new_str(DISPLAY_UUID));
+	bp_set(d, "type", bp_new_int(110));
+	bp_set(d, "widthPixels", bp_new_int(1280)); bp_set(d, "heightPixels", bp_new_int(720));
+	bp_set(d, "widthPixelsMax", bp_new_int(1280)); bp_set(d, "heightPixelsMax", bp_new_int(720));
+	bp_set(d, "widthPhysical", bp_new_int(155)); bp_set(d, "heightPhysical", bp_new_int(87));
+	bp_set(d, "maxFPS", bp_new_int(30));
+	bp_set(d, "features", bp_new_int(0x08));                   /* high-fidelity touch, no knob */
+	bp_set(d, "primaryInputDevice", bp_new_int(1));
+	int va = bp_new_array(1), v = bp_new_dict(9), sa = bp_new_dict(5);
+	bp_set(v, "viewAreaIndex", bp_new_int(0));
+	bp_set(v, "widthPixels", bp_new_int(1280)); bp_set(v, "heightPixels", bp_new_int(720));
+	bp_set(v, "originXPixels", bp_new_int(0)); bp_set(v, "originYPixels", bp_new_int(0));
+	bp_set(v, "viewAreaTransitionControl", bp_new_bool(0));
+	bp_set(v, "viewAreaStatusBarEdge", bp_new_int(0));
+	bp_set(v, "viewAreaSupportsFocusTransfer", bp_new_bool(0));
+	bp_set(sa, "widthPixels", bp_new_int(1280)); bp_set(sa, "heightPixels", bp_new_int(720));
+	bp_set(sa, "originXPixels", bp_new_int(0)); bp_set(sa, "originYPixels", bp_new_int(0));
+	bp_set(sa, "drawUIOutsideSafeArea", bp_new_bool(1));
+	bp_set(v, "safeArea", sa);
+	bp_push(va, v);
+	bp_set(d, "viewAreas", va);
+	bp_set(d, "initialViewArea", bp_new_int(0));
+	bp_set(d, "adjacentViewAreas", bp_new_array(0));
+	bp_push(disp, d);
+	bp_set(r, "displays", disp);
+	/* touch */
+	int hids = bp_new_array(1), h = bp_new_dict(7);
+	bp_set(h, "uuid", bp_new_str(HID_UUID));
+	bp_set(h, "name", bp_new_str("Touch Screen"));
+	bp_set(h, "hidVendorID", bp_new_int(2)); bp_set(h, "hidProductID", bp_new_int(1)); bp_set(h, "hidCountryCode", bp_new_int(0));
+	bp_set(h, "displayUUID", bp_new_str(DISPLAY_UUID));
+	bp_set(h, "hidDescriptor", bp_new_data(hid_desc, (int)sizeof hid_desc));
+	bp_push(hids, h);
+	bp_set(r, "hidDevices", hids);
+	return bp_write(r, out, cap);
+}
+
+static char *u64dec(char *p, uint64_t v)
+{
+	char t[24]; int n = 0;
+	do { t[n++] = (char)('0' + v % 10); v /= 10; } while (v);
+	while (n) *p++ = t[--n];
+	*p = 0;
+	return p;
+}
+
+static int setup_reply(const uint8_t *body, int n, uint8_t *out, int cap)
+{
+	bp_reset();
+	int root = bp_parse(body, n);
+	if (root < 0) { log_tag("SETUP?"); return -1; }
+	int streams = bp_get(root, "streams");
+	if (streams < 0) {                                   /* SETUP #1: the session */
+		sess_setup1++; log_tag("SETUP1");
+		int f = bp_get(root, "features");
+		char *q = str_cat(phone_feats, "phone features ");
+		q = str_u(q, f >= 0 ? (uint32_t)bp_nodes[f].n : 0);
+		int ka = bp_int_of(bp_get(root, "keepAliveLowPower"), 0) != 0;
+		int r = bp_new_dict(4), ef = bp_new_array(1);
+		bp_set(r, "eventPort", bp_new_int(EVENT_PORT));
+		bp_set(r, "timingPort", bp_new_int(TIMING_PORT));
+		if (ka) bp_set(r, "keepAlivePort", bp_new_int(KEEPALIVE_PORT));
+		bp_push(ef, bp_new_str("viewAreas"));
+		bp_set(r, "enabledFeatures", ef);
+		return bp_write(r, out, cap);
+	}
+	int resp = bp_new_dict(1), arr = bp_new_array(4);
+	for (int k = 0; k < bp_nodes[streams].n && k < 8; k++) {
+		int s = bp_item(streams, k);
+		int64_t ty = bp_int_of(bp_get(s, "type"), -1);
+		char tag[12] = "S"; u64dec(tag + 1, (uint64_t)(ty < 0 ? 0 : ty)); log_tag(tag);
+		if (ty == 110) {                                 /* the main screen */
+			n_s110++; setup110_ms = millis();
+			char salt[48]; char *q = str_cat(salt, "DataStream-Salt");
+			u64dec(q, (uint64_t)bp_int_of(bp_get(s, "streamConnectionID"), 0));   /* unsigned decimal */
+			hk(scr_key, salt, "DataStream-Output-Encryption-Key");
+			scr_keyed = 1;
+			int e = bp_new_dict(2);
+			bp_set(e, "type", bp_new_int(110)); bp_set(e, "dataPort", bp_new_int(SCREEN_PORT));
+			bp_push(arr, e);
+		} else n_other++;                                /* audio, alt screen, iAP channel: not offered */
+	}
+	bp_set(resp, "streams", arr);
+	return bp_write(resp, out, cap);
+}
 
 static int hdr_is(const char *l, const char *name)  /* case-insensitive "Name:" prefix */
 {
@@ -1082,135 +1249,294 @@ static int hdr_is(const char *l, const char *name)  /* case-insensitive "Name:" 
 	return l[i] == ':';
 }
 
-static void handle_requests(void)
+static void enc_input(tconn *c, const uint8_t *d, int n);
+
+static void handle_requests(tconn *c)
 {
 	for (;;) {
 		int he = -1;                                    /* end of headers */
-		for (int i = 0; i + 3 < rq_n; i++) if (rq[i] == '\r' && rq[i + 1] == '\n' && rq[i + 2] == '\r' && rq[i + 3] == '\n') { he = i + 4; break; }
-		if (he < 0) { if (rq_n == (int)sizeof rq) rq_n = 0; return; }
-		char line[160], method[16] = "", path[64] = "", proto[16] = "RTSP/1.0", cseq[16] = "";
+		for (int i = 0; i + 3 < c->rq_n; i++) if (c->rq[i] == '\r' && c->rq[i + 1] == '\n' && c->rq[i + 2] == '\r' && c->rq[i + 3] == '\n') { he = i + 4; break; }
+		if (he < 0) { if (c->rq_n == (int)sizeof c->rq) c->rq_n = 0; return; }
+		char line[160], method[16] = "", path[96] = "", proto[16] = "RTSP/1.0", cseq[16] = "";
 		int clen = 0, first = 1;
 		for (int i = 0; i < he - 2; ) {                 /* header lines */
 			int k = 0;
-			while (i < he - 2 && !(rq[i] == '\r' && rq[i + 1] == '\n')) { if (k < 159) line[k++] = (rq[i] >= 32 && rq[i] < 127) ? (char)rq[i] : '.'; i++; }
+			while (i < he - 2 && !(c->rq[i] == '\r' && c->rq[i + 1] == '\n')) { if (k < 159) line[k++] = (c->rq[i] >= 32 && c->rq[i] < 127) ? (char)c->rq[i] : '.'; i++; }
 			line[k] = 0; i += 2;
 			if (first) {
 				first = 0;
 				int a = 0, j = 0;
-				while (line[j] && line[j] != ' ' && a < 15) method[a++] = line[j++]; method[a] = 0; if (line[j]) j++;
-				a = 0; while (line[j] && line[j] != ' ' && a < 63) path[a++] = line[j++]; path[a] = 0; if (line[j]) j++;
-				a = 0; while (line[j] && a < 15) proto[a++] = line[j++]; proto[a] = 0;
-				memcpy(req_lines[0], req_lines[1], sizeof req_lines[0]);
-				int m = 0; while (line[m] && m < 71) { req_lines[1][m] = line[m]; m++; } req_lines[1][m] = 0;
-				n_req++;
+				while (line[j] && line[j] != ' ' && a < 15) method[a++] = line[j++];
+				method[a] = 0; if (line[j]) j++;
+				a = 0; while (line[j] && line[j] != ' ' && a < 95) path[a++] = line[j++];
+				path[a] = 0; if (line[j]) j++;
+				a = 0; while (line[j] && a < 15) proto[a++] = line[j++];
+				proto[a] = 0;
+				if (c == &cn[C_CTRL]) {
+					memcpy(req_lines[0], req_lines[1], sizeof req_lines[0]);
+					int m = 0; while (line[m] && m < 71) { req_lines[1][m] = line[m]; m++; }
+					req_lines[1][m] = 0;
+					n_req++;
+				}
 			} else if (hdr_is(line, "Content-Length")) {
 				const char *v = line + 15; while (*v == ' ') v++; while (*v >= '0' && *v <= '9') clen = clen * 10 + (*v++ - '0');
 			} else if (hdr_is(line, "Content-Type") && !first_ctype[0]) {
-				const char *v = line + 13; int a = 0; while (*v == ' ') v++; while (*v && a < 39) first_ctype[a++] = *v++; first_ctype[a] = 0;
+				const char *v = line + 13; int a = 0; while (*v == ' ') v++; while (*v && a < 39) first_ctype[a++] = *v++;
+				first_ctype[a] = 0;
 			} else if (hdr_is(line, "CSeq")) {
-				const char *v = line + 5; int a = 0; while (*v == ' ') v++; while (*v && a < 15) cseq[a++] = *v++; cseq[a] = 0;
+				const char *v = line + 5; int a = 0; while (*v == ' ') v++; while (*v && a < 15) cseq[a++] = *v++;
+				cseq[a] = 0;
 			}
 		}
-		if (clen < 0 || he + clen > (int)sizeof rq) { rq_n = 0; return; }
-		if (rq_n < he + clen) return;                   /* body not complete yet */
-		const uint8_t *body = rq + he;
-		static uint8_t out[2048];
-		int r = -2;
-		if (s_eq(path, "/pair-setup")) {
+		if (clen < 0 || he + clen > (int)sizeof c->rq) { c->rq_n = 0; return; }
+		if (c->rq_n < he + clen) return;                /* body not complete yet */
+		const uint8_t *body = c->rq + he;
+		static uint8_t out[12288];
+		int answered = 0;
+		if (c != &cn[C_CTRL]) {                         /* event channel: the phone's requests get a bare 200 */
+			if (!s_starts(method, "RTSP/")) { respond_t(c, proto, cseq, "", 0, 0); }
+			answered = 1;
+		} else if (s_eq(path, "/pair-setup")) {
 			uint32_t t0 = millis();
-			r = pair_setup(&pc, body, clen, out, sizeof out);
+			int r = pair_setup(&pc, body, clen, out, sizeof out);
 			pair_ms = millis() - t0;
 			ps_last = pc.ps_state;
 			pair_status = pc.last_err ? "pair-setup FAILED" : pc.ps_state == 6 ? "PAIRED (setup M6 sent)" : pc.ps_state == 4 ? (pc.transient ? "PIN proof OK, transient: PAIRED" : "PIN proof OK (M4 sent)") : "pair-setup M2 sent";
+			if (r >= 0) respond_t(c, proto, cseq, "application/pairing+tlv8", out, r);
+			answered = 1;
 		} else if (s_eq(path, "/pair-verify")) {
 			uint32_t t0 = millis();
-			r = pair_verify(&pc, body, clen, out, sizeof out);
+			int r = pair_verify(&pc, body, clen, out, sizeof out);
 			pair_ms = millis() - t0;
 			pv_last = pc.pv_state;
 			pair_status = pc.last_err ? "pair-verify FAILED" : pc.verified ? "VERIFIED: session keys ready" : "pair-verify M2 sent";
+			if (r >= 0) respond_t(c, proto, cseq, "application/pairing+tlv8", out, r);
+			answered = 1;
 		} else if (s_eq(path, "/auth-setup")) {
 			int a = auth_setup(body, clen, out, sizeof out);
-			if (a >= 0) respond_t(proto, cseq, "application/octet-stream", out, a);
+			if (a >= 0) respond_t(c, proto, cseq, "application/octet-stream", out, a);
+			log_tag("AUTH");
+			answered = 1;
+		} else if (s_eq(method, "SETUP")) {
+			int a = setup_reply(body, clen, out, sizeof out);
+			if (a >= 0) respond_t(c, proto, cseq, PLIST, out, a);
+			answered = 1;
+		} else if (s_eq(method, "GET") && s_eq(path, "/info")) {
+			n_info++; log_tag("INFO");
+			int a = info_plist(out, sizeof out);
+			if (a >= 0) respond_t(c, proto, cseq, PLIST, out, a); else log_tag("INFO-FAIL");
+			answered = 1;
+		} else {                                        /* RECORD, /command, /feedback, TEARDOWN, ...: 200 */
+			if (s_eq(method, "RECORD")) { n_record++; log_tag("REC"); }
+			else if (s_starts(path, "/command")) { if (!n_cmd++) log_tag("CMD"); }
+			else if (s_starts(path, "/feedback")) { if (!n_feedback++) log_tag("FB"); }
+			else if (s_eq(method, "TEARDOWN")) log_tag("TEARDOWN");
+			else { n_other++; log_tag(method); }
 		}
-		if (r >= 0) respond(proto, cseq, out, r);
+		if (!answered) respond_t(c, proto, cseq, "", 0, 0);
 		int used = he + clen;
-		mmove(rq, rq + used, rq_n - used); rq_n -= used;
-		if (pc.verified && !enc_on) {                   /* from here on the channel is encrypted */
-			enc_start();
-			int left = rq_n; rq_n = 0;
-			if (left) enc_input(rq, left);
+		mmove(c->rq, c->rq + used, c->rq_n - used); c->rq_n -= used;
+		if (c == &cn[C_CTRL] && pc.verified && !c->enc) {  /* from here on the channel is encrypted */
+			enc_start(c, "Control-Salt", "Control-Write-Encryption-Key", "Control-Read-Encryption-Key");
+			int left = c->rq_n; c->rq_n = 0;
+			if (left) enc_input(c, c->rq, left);
 			return;
 		}
 	}
 }
 
-static void enc_input(const uint8_t *d, int n)
+static void enc_input(tconn *c, const uint8_t *d, int n)
 {
-	n_enc_rx += (uint32_t)n;
-	if (eb_n + n > (int)sizeof eb) { n_ef_bad++; eb_n = 0; return; }
-	memcpy(eb + eb_n, d, (size_t)n); eb_n += n;
+	if (c == &cn[C_CTRL]) n_enc_rx += (uint32_t)n;
+	if (c->eb_n + n > (int)sizeof c->eb) { c->ef_bad++; c->eb_n = 0; return; }
+	memcpy(c->eb + c->eb_n, d, (size_t)n); c->eb_n += n;
 	for (;;) {
-		if (eb_n < 2) return;
-		int len = eb[0] | eb[1] << 8;
-		if (len > 0x4000) { n_ef_bad++; eb_n = 0; return; }
-		if (eb_n < 2 + len + 16) return;
+		if (c->eb_n < 2) return;
+		int len = c->eb[0] | c->eb[1] << 8;
+		if (len > 0x4000) { c->ef_bad++; c->eb_n = 0; return; }
+		if (c->eb_n < 2 + len + 16) return;
 		uint8_t nonce[12]; crypto_aead_ctx x;
-		ctr_nonce(nonce, rd_ctr);
-		crypto_aead_init_ietf(&x, ck_read, nonce);
-		if (rq_n + len > (int)sizeof rq ||
-		    crypto_aead_read(&x, rq + rq_n, eb + 2 + len, eb, 2, eb + 2, (size_t)len)) { n_ef_bad++; eb_n = 0; return; }
-		rd_ctr++; n_ef_in++; rq_n += len;
+		ctr_nonce(nonce, c->rc);
+		crypto_aead_init_ietf(&x, c->kr, nonce);
+		if (c->rq_n + len > (int)sizeof c->rq ||
+		    crypto_aead_read(&x, c->rq + c->rq_n, c->eb + 2 + len, c->eb, 2, c->eb + 2, (size_t)len)) { c->ef_bad++; c->eb_n = 0; return; }
+		c->rc++; c->ef_in++; c->rq_n += len;
 		int used = 2 + len + 16;
-		mmove(eb, eb + used, eb_n - used); eb_n -= used;
-		handle_requests();
+		mmove(c->eb, c->eb + used, c->eb_n - used); c->eb_n -= used;
+		handle_requests(c);
 	}
+}
+
+/* ---- the screen stream: 128-byte header (u32 LE size, opcode) + body ---- */
+static uint8_t sbuf[1 << 20]; static int sb_n;
+static uint64_t sc_ctr;
+static uint32_t v_cfg, v_frames, v_bad, v_idr, v_bytes, v_first_ms, v_last_size, v_nal_sps;
+static int v_profile = -1, v_level, v_w, v_h;
+
+/* SPS width/height (Exp-Golomb); gives up quietly on scaling matrices */
+static const uint8_t *bs_p; static int bs_n, bs_bit;
+static uint32_t bs_u(int n) { uint32_t v = 0; while (n--) { int byte = bs_bit >> 3; v <<= 1; if (byte < bs_n) v |= (uint32_t)(bs_p[byte] >> (7 - (bs_bit & 7)) & 1); bs_bit++; } return v; }
+static uint32_t bs_ue(void) { int z = 0; while (!bs_u(1) && z < 32) z++; return z ? ((1u << z) - 1 + bs_u(z)) : 0; }
+static int32_t bs_se(void) { uint32_t k = bs_ue(); return (k & 1) ? (int32_t)((k + 1) / 2) : -(int32_t)(k / 2); }
+static void sps_size(const uint8_t *s, int n)
+{
+	static uint8_t rb[256]; int m = 0;                   /* drop emulation-prevention bytes */
+	for (int i = 0; i < n && m < 256; i++) { if (i >= 2 && s[i] == 3 && s[i - 1] == 0 && s[i - 2] == 0) continue; rb[m++] = s[i]; }
+	bs_p = rb; bs_n = m; bs_bit = 8;                     /* skip the NAL header */
+	int prof = (int)bs_u(8); bs_u(8); bs_u(8); bs_ue();
+	if (prof == 100 || prof == 110 || prof == 122 || prof == 244 || prof == 44 || prof == 83 || prof == 86 || prof == 118 || prof == 128) {
+		uint32_t cf = bs_ue(); if (cf == 3) bs_u(1);
+		bs_ue(); bs_ue(); bs_u(1);
+		if (bs_u(1)) return;                             /* scaling matrices: not handled */
+	}
+	bs_ue();
+	uint32_t poc = bs_ue();
+	if (poc == 0) bs_ue();
+	else if (poc == 1) { bs_u(1); bs_se(); bs_se(); uint32_t k = bs_ue(); for (uint32_t i = 0; i < k && i < 256; i++) bs_se(); }
+	bs_ue(); bs_u(1);
+	uint32_t wm = bs_ue(), hm = bs_ue(), fmo = bs_u(1);
+	if (!fmo) bs_u(1);
+	bs_u(1);
+	uint32_t cl = 0, cr = 0, ct = 0, cb = 0;
+	if (bs_u(1)) { cl = bs_ue(); cr = bs_ue(); ct = bs_ue(); cb = bs_ue(); }
+	v_w = (int)((wm + 1) * 16 - 2 * (cl + cr));
+	v_h = (int)((2 - fmo) * (hm + 1) * 16 - 2 * (ct + cb) * (2 - fmo));
+}
+
+static void screen_msg(uint8_t *h, uint8_t *b, int n)
+{
+	if (h[4] == 1) {                                     /* config: avcC, in clear */
+		v_cfg++;
+		const uint8_t *rec = b; int rn = n;
+		for (int i = 0; i + 4 <= n; i++) if (b[i] == 'a' && b[i + 1] == 'v' && b[i + 2] == 'c' && b[i + 3] == 'C') { rec = b + i + 4; rn = n - i - 4; break; }
+		if (rn >= 8 && rec[0] == 1) {
+			v_profile = rec[1]; v_level = rec[3];
+			int sl = rec[6] << 8 | rec[7];
+			if ((rec[5] & 31) && 8 + sl <= rn) { v_nal_sps++; sps_size(rec + 8, sl); }
+		}
+		return;
+	}
+	if (h[4] != 0) return;
+	if (n >= 16) {
+		uint8_t nonce[12]; crypto_aead_ctx x;
+		ctr_nonce(nonce, sc_ctr);
+		crypto_aead_init_ietf(&x, scr_key, nonce);
+		if (!scr_keyed || crypto_aead_read(&x, b, b + n - 16, h, 128, b, (size_t)(n - 16))) { v_bad++; return; }
+		sc_ctr++; n -= 16;
+	}
+	if (!v_frames) v_first_ms = millis() - setup110_ms;
+	v_frames++; v_bytes += (uint32_t)n; v_last_size = (uint32_t)n;
+	for (int o = 0; o + 4 < n; ) {                       /* AVCC: 4-byte big-endian NAL lengths */
+		uint32_t l = (uint32_t)b[o] << 24 | (uint32_t)b[o + 1] << 16 | (uint32_t)b[o + 2] << 8 | b[o + 3];
+		if (l == 0 || o + 4 + (int)l > n) break;
+		if ((b[o + 4] & 31) == 5) { v_idr++; break; }
+		o += 4 + (int)l;
+	}
+}
+
+static void screen_input(const uint8_t *d, int n)
+{
+	if (sb_n + n > (int)sizeof sbuf) { v_bad++; sb_n = 0; return; }
+	memcpy(sbuf + sb_n, d, (size_t)n); sb_n += n;
+	int off = 0;
+	while (sb_n - off >= 128) {
+		uint8_t *h = sbuf + off;
+		uint32_t sz = (uint32_t)h[0] | (uint32_t)h[1] << 8 | (uint32_t)h[2] << 16 | (uint32_t)h[3] << 24;
+		if (sz > sizeof sbuf - 128) { v_bad++; sb_n = 0; return; }
+		if (sb_n - off < 128 + (int)sz) break;
+		screen_msg(h, h + 128, (int)sz);
+		off += 128 + (int)sz;
+	}
+	if (off) { mmove(sbuf, sbuf + off, sb_n - off); sb_n -= off; }
 }
 
 static void on_tcp(const uint8_t *f, const uint8_t *ip, const uint8_t *p, int plen)
 {
-	uint16_t sp = (uint16_t)(p[0] << 8 | p[1]);
+	uint16_t sp = (uint16_t)(p[0] << 8 | p[1]), dp = (uint16_t)(p[2] << 8 | p[3]);
+	int ci = -1;
+	for (int i = 0; i < NCONN; i++) if (c_port[i] == dp) ci = i;
+	if (ci < 0) return;
+	tconn *c = &cn[ci];
 	uint8_t fl = p[13];
 	uint32_t seq = (uint32_t)p[4] << 24 | (uint32_t)p[5] << 16 | (uint32_t)p[6] << 8 | p[7];
 	uint32_t ack = (uint32_t)p[8] << 24 | (uint32_t)p[9] << 16 | (uint32_t)p[10] << 8 | p[11];
 	int hl = (p[12] >> 4) * 4;
 	if (hl < 20 || hl > plen) return;
-	if (fl & 0x04) { if (sp == tcp_pport) { n_rst_in++; tcp_state = 0; } return; }
-	if (fl & 0x02) {                                    /* SYN: (re)start the connection */
-		if (tcp_state == 0 || sp != tcp_pport || tcp_state == 3) {
-			memcpy(tcp_peer_mac, f + 6, 6); memcpy(tcp_peer, ip + 8, 16); tcp_pport = sp;
-			tcp_rcv_nxt = seq + 1; tcp_state = 1; n_conn++;
-			tcp_iss += 0x10000;
-			tcp_snd_una = tcp_snd_nxt = tcp_iss + 1; txq_n = 0; rq_n = 0;
-			pc.verified = 0; enc_on = 0;                /* a new connection starts unencrypted */
+	if (fl & 0x04) { if (sp == c->pport) { c->rsts++; c->state = 0; } return; }
+	if (fl & 0x02) {                                    /* SYN: (re)start this connection */
+		if (c->state == 0 || sp != c->pport || c->state == 3) {
+			memcpy(c->mac, f + 6, 6); memcpy(c->ip, ip + 8, 16); c->pport = sp;
+			c->rcv = seq + 1; c->state = 1; c->conns++;
+			c->iss = 0x0F133000u + (uint32_t)ci * 0x01000000u + c->conns * 0x10000u;
+			c->una = c->nxt = c->iss + 1; c->txq_n = 0; c->rq_n = 0; c->eb_n = 0; c->enc = 0;
+			c->win = ci == C_SCR ? 0xFFFF : 0x2000;
+			if (ci == C_CTRL) pc.verified = 0;          /* a new control connection starts unencrypted */
+			if (ci == C_EVT) enc_start(c, "Events-Salt", "Events-Read-Encryption-Key", "Events-Write-Encryption-Key");   /* not swapped */
+			if (ci == C_SCR) { sb_n = 0; sc_ctr = 0; }
 		}
-		tcp_seg(0x12, tcp_iss, 0, 0, 1);                /* SYN+ACK */
+		tcp_seg(c, 0x12, c->iss, 0, 0, 1);              /* SYN+ACK */
 		return;
 	}
-	if (sp != tcp_pport || tcp_state == 0) return;
+	if (sp != c->pport || c->state == 0) return;
 	if (fl & 0x10) {
-		if (tcp_state == 1) tcp_state = 2;
-		uint32_t acked = ack - tcp_snd_una;
-		if (acked && acked <= (uint32_t)txq_n) {
-			mmove(txq, txq + acked, txq_n - (int)acked); txq_n -= (int)acked; tcp_snd_una = ack;
-			tcp_last_tx = millis();
+		if (c->state == 1) c->state = 2;
+		uint32_t acked = ack - c->una;
+		if (acked && acked <= (uint32_t)c->txq_n) {
+			mmove(c->txq, c->txq + acked, c->txq_n - (int)acked); c->txq_n -= (int)acked; c->una = ack;
+			c->last_tx = millis();
 		}
 	}
 	int dl = plen - hl;
 	if (dl > 0) {
-		if (seq == tcp_rcv_nxt) {
-			tcp_rcv_nxt += (uint32_t)dl; tcp_rx_bytes += (uint32_t)dl;
-			tcp_seg(0x10, tcp_snd_nxt, 0, 0, 0);        /* ACK before the (slow) pairing maths */
-			if (enc_on) enc_input(p + hl, dl);
+		if (seq == c->rcv) {
+			c->rcv += (uint32_t)dl; c->rx += (uint32_t)dl;
+			tcp_seg(c, 0x10, c->nxt, 0, 0, 0);          /* ACK before any slow work */
+			if (ci == C_SCR) screen_input(p + hl, dl);
+			else if (c->enc) enc_input(c, p + hl, dl);
 			else {
-				if (rq_n + dl <= (int)sizeof rq) { memcpy(rq + rq_n, p + hl, (size_t)dl); rq_n += dl; }
-				handle_requests();
+				if (c->rq_n + dl <= (int)sizeof c->rq) { memcpy(c->rq + c->rq_n, p + hl, (size_t)dl); c->rq_n += dl; }
+				handle_requests(c);
 			}
-		} else tcp_seg(0x10, tcp_snd_nxt, 0, 0, 0);     /* re-ACK out-of-order or duplicate data */
+		} else tcp_seg(c, 0x10, c->nxt, 0, 0, 0);       /* re-ACK out-of-order or duplicate data */
 	}
-	if ((fl & 0x01) && seq + (uint32_t)(dl > 0 ? dl : 0) == tcp_rcv_nxt) {   /* FIN */
-		tcp_rcv_nxt++; n_fin++; tcp_state = 3;
-		tcp_seg(0x11, tcp_snd_nxt, 0, 0, 0); tcp_snd_nxt++;
+	if ((fl & 0x01) && seq + (uint32_t)(dl > 0 ? dl : 0) == c->rcv) {   /* FIN */
+		c->rcv++; c->fins++; c->state = 3;
+		tcp_seg(c, 0x11, c->nxt, 0, 0, 0); c->nxt++;
 	}
+}
+
+/* ---- timing (NTP-style, UDP): answer each 210 with a 211 ---- */
+static void udp_send(const uint8_t *dmac, const uint8_t *dst, uint16_t sport, uint16_t dport, const uint8_t *d, int n)
+{
+	uint8_t *u = tx6 + 54;
+	int ul = 8 + n;
+	u[0] = (uint8_t)(sport >> 8); u[1] = (uint8_t)sport; u[2] = (uint8_t)(dport >> 8); u[3] = (uint8_t)dport;
+	u[4] = (uint8_t)(ul >> 8); u[5] = (uint8_t)ul;
+	memcpy(u + 8, d, (size_t)n);
+	send6(dmac, dst, 17, ul);
+}
+static uint64_t ntp_now(void)                       /* the phone's clock from 4E0B if we have it, else uptime */
+{
+	static uint32_t base_ms; static uint64_t base_s; static int based;
+	uint32_t ms = millis();
+	if (have_time && !based) { base_ms = ms; base_s = t_secs + 2208988800ull; based = 1; }
+	uint64_t s = based ? base_s + (ms - base_ms) / 1000 : 2208988800ull + ms / 1000;
+	uint32_t frac_ms = based ? (ms - base_ms) % 1000 : ms % 1000;
+	return s << 32 | (uint64_t)(((uint64_t)frac_ms << 32) / 1000);
+}
+static void on_udp_session(const uint8_t *f, const uint8_t *ip, const uint8_t *u, int ul)
+{
+	uint16_t sp = (uint16_t)(u[0] << 8 | u[1]), dp = (uint16_t)(u[2] << 8 | u[3]);
+	const uint8_t *d = u + 8; int n = ul - 8;
+	if (dp == KEEPALIVE_PORT) { n_keepalive++; return; }
+	if (dp != TIMING_PORT || n < 32 || (d[1] & 0x7F) != (210 & 0x7F)) return;
+	n_timing++;
+	uint8_t r[32] = { 0 };
+	uint64_t now = ntp_now();
+	r[0] = 0x80; r[1] = 0xD3; r[2] = 0; r[3] = 7;
+	memcpy(r + 8, d + 24, 8);
+	for (int i = 0; i < 8; i++) { r[16 + i] = (uint8_t)(now >> (56 - 8 * i)); r[24 + i] = r[16 + i]; }
+	udp_send(f + 6, ip + 8, TIMING_PORT, sp, r, 32);
 }
 
 /* randomness: cycle-counter jitter of every received frame, hashed */
@@ -1295,7 +1621,7 @@ static void on_ip6(const uint8_t *f, int l)
 			n_syn++;
 			if (dp != syn_ports[0]) { for (int j = 3; j > 0; j--) syn_ports[j] = syn_ports[j - 1]; syn_ports[0] = dp; }
 		}
-		if (dp == AP_PORT) on_tcp(f, ip, p, plen);
+		on_tcp(f, ip, p, plen);
 	}
 }
 
@@ -1313,7 +1639,7 @@ static void on_frame(const uint8_t *f, int l, uint16_t ty)
 	if (!u || ul < 8 || u + ul > f + l) return;
 	int dp = u[2] << 8 | u[3];
 	if (dp == 5353) on_mdns(u + 8, ul - 8);
-	(void)0;
+	if (ty == 0x86DD && (dp == TIMING_PORT || dp == KEEPALIVE_PORT)) on_udp_session(f, f + 14, u, ul);
 	if (dp == 67) n_dhcp_req++;
 }
 
@@ -1321,7 +1647,7 @@ static void device_poll(void)
 {
 	musb_poll();
 	tcp_poll();
-	if (!pc.srp_ready && pc.ps_state != 2 && txq_n == 0 && millis() - tcp_last_tx > 2000) pair_prepare(&pc);
+	if (!pc.srp_ready && pc.ps_state != 2 && cn[C_CTRL].txq_n == 0 && millis() - cn[C_CTRL].last_tx > 2000) pair_prepare(&pc);
 	if (notify_pending) {
 		notify_pending = 0;
 		uint8_t sp[16] = { 0xA1, 0x2A, 0, 0, 1, 0, 8, 0 };
@@ -1434,7 +1760,10 @@ static void status(void)
 		p = str_cat(p, "  \""); p = str_cat(p, manu); p = str_cat(p, "\" \""); p = str_cat(p, prod); p = str_cat(p, "\"");
 		gfx_text(30, 290, s, &font16x32, 1, 0xffffff);
 	}
-	if (sw_line[0]) gfx_text(30, 330, sw_line, &font16x32, 1, 0xffffff);
+	if (req_log[0]) {                                    /* the session, once it starts (replaces the switch line) */
+		p = str_cat(s, "session: "); p = str_cat(p, req_log);
+		gfx_text(30, 330, s, &font16x32, 1, 0xffff60);
+	} else if (sw_line[0]) gfx_text(30, 330, sw_line, &font16x32, 1, 0xffffff);
 	if (phase == 1) {
 		static const char *const lsn[] = { "idle", "detect sent", "detect answered", "SYN sent", "LINKED" };
 		p = str_cat(s, "iAP2: "); p = str_cat(p, lsn[ls]);
@@ -1444,7 +1773,15 @@ static void status(void)
 		p = str_cat(p, "  data "); p = str_u(p, (uint32_t)n_data);
 		p = str_cat(p, "  rst "); p = str_u(p, (uint32_t)n_rst); p = str_cat(p, "  bad "); p = str_u(p, (uint32_t)n_badsum);
 		gfx_text(30, 370, s, &font16x32, 1, ls == 4 ? 0x40ff60 : 0xffffff);
-		if (their_syn_n) {
+		if (n_s110 || cn[C_EVT].conns) {                 /* video and session channels (replaces the phone SYN line) */
+			p = str_cat(s, "VIDEO: cfg "); p = str_u(p, v_cfg);
+			if (v_profile >= 0) { p = str_cat(p, " prof "); p = str_u(p, (uint32_t)v_profile); p = str_cat(p, " L"); p = str_u(p, (uint32_t)v_level); }
+			if (v_w) { *p++ = ' '; p = str_u(p, (uint32_t)v_w); *p++ = 'x'; p = str_u(p, (uint32_t)v_h); *p = 0; }
+			p = str_cat(p, "  frames "); p = str_u(p, v_frames); p = str_cat(p, " IDR "); p = str_u(p, v_idr);
+			p = str_cat(p, " "); p = str_u(p, v_bytes / 1024); p = str_cat(p, "KB bad "); p = str_u(p, v_bad);
+			if (v_frames) { p = str_cat(p, " first "); p = str_u(p, v_first_ms); p = str_cat(p, "ms"); }
+			gfx_text(30, 404, s, &font16x32, 1, v_frames ? 0x40ff60 : v_bad ? 0xff6060 : 0xffffff);
+		} else if (their_syn_n) {
 			p = str_cat(s, "phone SYN "); p = hexn(p, their_ctl, 2); p = str_cat(p, ": ");
 			for (int i = 0; i < their_syn_n && i < 16; i++) { p = hexn(p, their_syn[i], 2); *p++ = ' '; *p = 0; }
 			gfx_text(30, 404, s, &font16x32, 1, 0xa0ffa0);
@@ -1468,12 +1805,14 @@ static void status(void)
 		for (int i = 0; i < 4 && syn_ports[i]; i++) { *p++ = ' '; p = str_u(p, syn_ports[i]); }
 		gfx_text(30, 616, s, &font8x16, 1, n_syn ? 0x40ff60 : 0xffffff);
 		{
-			static const char *const st[] = { "listen", "SYN rcvd", "ESTABLISHED", "closed by phone" };
-			p = str_cat(s, "TCP 7000: "); p = str_cat(p, st[tcp_state]); p = str_cat(p, "  conns "); p = str_u(p, n_conn);
-			p = str_cat(p, "  rx "); p = str_u(p, tcp_rx_bytes); p = str_cat(p, " retx "); p = str_u(p, n_retx);
-			p = str_cat(p, " fin "); p = str_u(p, n_fin); p = str_cat(p, " rst "); p = str_u(p, n_rst_in);
-			p = str_cat(p, "  req "); p = str_u(p, (uint32_t)n_req);
-			gfx_text(30, 88, s, &font16x32, 1, tcp_state >= 2 ? 0x40ff60 : 0xffffff);
+			static const char *const st[] = { "listen", "SYN", "up", "closed" };
+			tconn *k = &cn[C_CTRL], *ev = &cn[C_EVT], *sc = &cn[C_SCR];
+			p = str_cat(s, "ctrl "); p = str_cat(p, st[k->state]); p = str_cat(p, " x"); p = str_u(p, k->conns);
+			p = str_cat(p, " rx "); p = str_u(p, k->rx); p = str_cat(p, " retx "); p = str_u(p, k->retx);
+			p = str_cat(p, " | evt "); p = str_cat(p, st[ev->state]); p = str_cat(p, " in "); p = str_u(p, ev->ef_in); p = str_cat(p, " bad "); p = str_u(p, ev->ef_bad);
+			p = str_cat(p, " | scr "); p = str_cat(p, st[sc->state]); p = str_cat(p, " "); p = str_u(p, sc->rx / 1024); p = str_cat(p, "KB");
+			p = str_cat(p, " | ntp "); p = str_u(p, n_timing);
+			gfx_text(30, 88, s, &font16x32, 1, k->state >= 2 ? 0x40ff60 : 0xffffff);
 			p = str_cat(s, req_lines[0]); if (req_lines[0][0]) p = str_cat(p, "  |  "); p = str_cat(p, req_lines[1]);
 			gfx_text(30, 124, s, &font16x32, 1, 0xffff60);
 			if (!pair_status[0] && kat_ok >= 0) {
@@ -1486,13 +1825,17 @@ static void status(void)
 				if (pc.last_err) { p = str_cat(p, " at "); p = str_u(p, (uint32_t)pc.last_err); }
 				p = str_cat(p, "  ("); p = str_u(p, pair_ms); p = str_cat(p, " ms)");
 				if (n_enc_rx) {
-					p = str_cat(p, "  enc frames in "); p = str_u(p, n_ef_in); p = str_cat(p, " bad "); p = str_u(p, n_ef_bad);
-					p = str_cat(p, " out "); p = str_u(p, n_ef_out);
+					p = str_cat(p, "  enc frames in "); p = str_u(p, cn[C_CTRL].ef_in); p = str_cat(p, " bad "); p = str_u(p, cn[C_CTRL].ef_bad);
+					p = str_cat(p, " out "); p = str_u(p, cn[C_CTRL].ef_out);
 				}
-				gfx_text(30, 160, s, &font16x32, 1, pc.last_err || n_ef_bad ? 0xff6060 : 0x40ff60);
+				gfx_text(30, 160, s, &font16x32, 1, pc.last_err || cn[C_CTRL].ef_bad ? 0xff6060 : 0x40ff60);
 			}
 			if (auth_status[0]) {
 				p = str_cat(s, auth_status); p = str_cat(p, "  ("); p = str_u(p, auth_ms); p = str_cat(p, " ms)");
+				if (phone_feats[0]) { p = str_cat(p, "   "); p = str_cat(p, phone_feats); }
+				if (n_info) { p = str_cat(p, "   info x"); p = str_u(p, (uint32_t)n_info); }
+				if (n_cmd) { p = str_cat(p, "  cmd x"); p = str_u(p, (uint32_t)n_cmd); }
+				if (n_feedback) { p = str_cat(p, "  feedback x"); p = str_u(p, (uint32_t)n_feedback); }
 				gfx_text(30, 196, s, &font8x16, 1, 0x40ff60);
 			}
 		}

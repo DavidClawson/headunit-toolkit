@@ -38,3 +38,5 @@ tools/fel/dram/test/pair_host
 tools/fel/dram/test/kat_host
 tools/fel/dram/test/hashes_host
 tools/fel/dram/test/bplist_host
+tools/fel/dram/test/session_host
+tools/fel/dram/test/session_host.c
