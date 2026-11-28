@@ -1000,9 +1000,9 @@ iPhone:
 | Identification | done | stock's layout, `1D02` accepted |
 | Power and time messages | done | `AE00`/`AE03` out, `4E0B` and `AE01` in |
 | NCM link | done | phone selects alt 1; DHCP and mDNS traffic |
-| Our side of the link | next | IPv6 ND, address, mDNS `_airplay._tcp` |
-| CarPlay control connection | todo | to the phone's `_carplay-ctrl._tcp` |
-| AirPlay/CarPlay session | todo | pairing, MFi-SAP, H.264 video, audio |
+| Our side of the link | done | IPv6 link-local, ND, mDNS `_airplay._tcp` (see below) |
+| CarPlay start (`0x4300`/`0x4301`) | done | phone connects to our port 7000 |
+| AirPlay/CarPlay session | next | `POST /pair-setup` arrives; pairing, MFi-SAP, H.264, audio |
 
 The last two rows are where hosting stock's `carplay.mod` (the chosen
 direction, `docs/carplay-host.md`) or a large amount of our own code comes
@@ -1028,3 +1028,45 @@ About 30 s after NCM comes up, the phone:
 **Next:** answer as stock does. That means an IPv6 link-local address with
 neighbour advertisements, and an mDNS response for `_airplay._tcp` with
 stock's TXT record. Then watch for the phone's TCP connection.
+
+## 2026-11-27 (night): the iPhone connects to us and asks to pair
+
+**Our side of the network.** `carplaytest.c` now has an IPv6 link-local
+address (`fe80::f1:33ff:fe00:2`), answers neighbour solicitations and pings,
+and answers `_airplay._tcp` with stock's exact records (instance `CarPlay`,
+`Computer.local:7000`, stock's TXT; `docs/carplay-iap2.md` §5). A Mac on the
+same gadget resolves all of it with `dns-sd`.
+
+**That wasn't enough: the phone kept asking and never connected.** The missing
+step is an iAP2 exchange that stock's identification never declares (found
+by reading the public receivers xcertplay and LIVI; nothing copied;
+`docs/carplay-hosting-plan.md`, "What gets the phone to connect"):
+- declare `0x4301` CarPlayStartSession (sent) and `0x4300`
+  CarPlayAvailability (received) in identification;
+- the phone sends `0x4300` (75 bytes, wired available = 1);
+- we answer `0x4301` with our link-local address, port 7000, our MAC as
+  device id, a public key (placeholder for now) and a source version.
+
+Nobody had shown this working on a role-switched gadget; it does.
+
+**Then, on the bench:**
+1. the phone sends a neighbour solicitation for our address (we answer);
+2. it opens TCP to port 7000: 8 SYNs while nothing listened;
+3. with a minimal TCP responder, the connection is established and the
+   first request is **`POST /pair-setup RTSP/1.0`** (278 bytes,
+   `application/x-…` body);
+4. we don't answer yet, so it closes and retries once.
+
+Side notes: the phone's time arrives in `4E0B` and decodes correctly
+(`2026-11-27 20:22:11`, UTC−7). With no DHCP answer the phone eventually
+self-assigns `169.254.x.x`; IPv6 is the path that matters.
+
+**Direction:** stock `carplay.mod` hosting is parked. Its licence check
+(`/dev/spinor2` ioctl 9) is a handshake against a secret key in the vendor
+kernel, and video breaks without it; satisfying it would mean reproducing
+that secret (`docs/carplay-hosting-plan.md` §1). We write our own receiver.
+
+**Next:** pairing. `pair-setup` is SRP-6a (3072-bit, SHA-512) with Ed25519
+and ChaCha20-Poly1305, then `pair-verify` (X25519), then MFi-SAP signed by
+our MFi chip. That needs a bignum modexp and a small crypto library, a real
+step up from the bench tests so far.
