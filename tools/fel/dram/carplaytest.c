@@ -234,6 +234,12 @@ static uint32_t cfg_at, n_iap_in, n_frames, n_ntb_bad, n_class;
 static uint16_t types[4], ports[4];
 static uint32_t n_mdns, n_icmp6;
 
+static int memcmp(const void *a, const void *b, size_t n)
+{
+	const uint8_t *x = a, *y = b;
+	for (; n; n--, x++, y++) if (*x != *y) return *x - *y;
+	return 0;
+}
 static void memmove_(uint8_t *d, const uint8_t *s, int n) { for (int i = 0; i < n; i++) d[i] = s[i]; }
 static void put16(uint8_t *p, uint16_t v) { p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); }
 static void put32(uint8_t *p, uint32_t v) { put16(p, (uint16_t)v); put16(p + 2, (uint16_t)(v >> 16)); }
@@ -462,6 +468,34 @@ static uint16_t rej_ids[8]; static int n_rej;
 static void send_identification(void);    /* filled in from docs/carplay-iap2.md */
 static void power_updates(void);
 
+static int have_time; static uint64_t t_secs; static int t_tz, t_dst;
+static void on_time(const uint8_t *m, int n)              /* 4E0B DeviceTimeUpdate */
+{
+	for (int o = 6; o + 4 <= n; ) {
+		int pl = m[o] << 8 | m[o + 1], id = m[o + 2] << 8 | m[o + 3];
+		if (pl < 4 || o + pl > n) break;
+		const uint8_t *d = m + o + 4;
+		if (id == 0 && pl == 12) { t_secs = 0; for (int i = 0; i < 8; i++) t_secs = t_secs << 8 | d[i]; have_time = 1; }
+		if (id == 1 && pl == 6) t_tz = (int16_t)(d[0] << 8 | d[1]);
+		if (id == 2 && pl == 5) t_dst = (int8_t)d[0];
+		o += pl;
+	}
+}
+static char *fmt_time(char *p, uint64_t secs)             /* Y-M-D h:m:s (civil from days) */
+{
+	int64_t z = (int64_t)(secs / 86400) + 719468;
+	uint32_t sod = (uint32_t)(secs % 86400);
+	int64_t era = z / 146097; uint32_t doe = (uint32_t)(z - era * 146097);
+	uint32_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+	int64_t y = (int64_t)yoe + era * 400; uint32_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+	uint32_t mp = (5 * doy + 2) / 153, dd = doy - (153 * mp + 2) / 5 + 1, mm = mp < 10 ? mp + 3 : mp - 9;
+	if (mm <= 2) y++;
+	p = str_u(p, (uint32_t)y); *p++ = '-'; if (mm < 10) *p++ = '0'; p = str_u(p, mm); *p++ = '-'; if (dd < 10) *p++ = '0'; p = str_u(p, dd);
+	*p++ = ' '; uint32_t h = sod / 3600, mi = sod / 60 % 60, s = sod % 60;
+	if (h < 10) *p++ = '0'; p = str_u(p, h); *p++ = ':'; if (mi < 10) *p++ = '0'; p = str_u(p, mi); *p++ = ':'; if (s < 10) *p++ = '0'; p = str_u(p, s);
+	return p;
+}
+
 static int auth_result;                   /* 0 none, 1 succeeded (AA05), -1 failed (AA04), -2 chip error */
 static void on_message(const uint8_t *m, int n)
 {
@@ -475,6 +509,7 @@ static void on_message(const uint8_t *m, int n)
 		else auth_result = -2;
 	} else if (id == 0xAA05) auth_result = 1;
 	else if (id == 0x1D00) send_identification();
+	else if (id == 0x4E0B) on_time(m, n);
 	else if (id == 0x1D02) { ident_result = 1; power_updates(); }
 	else if (id == 0x1D03) {                             /* the parameters it rejected */
 		ident_result = -1;
@@ -621,6 +656,7 @@ static void iap2_poll(void)
 static char seen[NSEEN][44];
 static int n_seen;
 static uint32_t n_dhcp_req;
+static int want_airplay;                  /* the phone asked for _airplay._tcp */
 static uint8_t phone_ip4[4];
 
 static int dns_name(const uint8_t *msg, int mlen, int off, char *out, int max, int *end)
@@ -684,6 +720,7 @@ static void on_mdns(const uint8_t *m, int n)
 		if (off + 4 > n) return;
 		const char *s = svc_part(nm);
 		if (s) remember('Q', s, rtype(m[off] << 8 | m[off + 1]), -1);
+		if (s && s[1] == 'a' && s[2] == 'i' && s[3] == 'r' && s[8] == '.') want_airplay = 1;   /* "_airplay._tcp..." */
 		off += 4;
 	}
 	for (int i = 0; i < rr && off < n; i++) {           /* answers: what the phone announces */
@@ -706,8 +743,155 @@ static void on_mdns(const uint8_t *m, int n)
 	}
 }
 
+/* ---- our side of the link: IPv6 link-local, neighbour discovery, mDNS answer ----
+   MAC 02:F1:33:00:00:02 (the iMACAddress string names the host side, ...01, as
+   in ncmtest.c). Link-local address from it by EUI-64: fe80::f1:33ff:fe00:2. */
+static const uint8_t my_mac[6] = { 0x02, 0xF1, 0x33, 0x00, 0x00, 0x02 };
+static const uint8_t my_ll[16] = { 0xFE, 0x80, 0, 0, 0, 0, 0, 0, 0x00, 0xF1, 0x33, 0xFF, 0xFE, 0x00, 0x00, 0x02 };
+static const uint8_t mdns6[16] = { 0xFF, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xFB };
+static const uint8_t all6[16] = { 0xFF, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x01 };
+static uint32_t n_ns, n_na_sent, n_ping6, n_mdns_ans, n_syn;
+static uint16_t syn_ports[4];
+static uint16_t in_seq;
+#define ADVERTISE 1                       /* answer _airplay._tcp as stock does (docs/carplay-iap2.md section 5) */
+
+static void eth_send(const uint8_t *frame, int len)
+{
+	static uint8_t nb[1600 + 32];
+	if (!ncm_on || len > 1514) return;
+	int dg = 32, total = dg + len;
+	memset(nb, 0, dg);
+	put32(nb, 0x484D434E); put16(nb + 4, 12); put16(nb + 6, in_seq++); put16(nb + 8, (uint16_t)total); put16(nb + 10, 12);
+	put32(nb + 12, 0x304D434E); put16(nb + 16, 16); put16(nb + 18, 0); put16(nb + 20, (uint16_t)dg); put16(nb + 22, (uint16_t)len);
+	memcpy(nb + dg, frame, len);
+	musb_send(2, nb, total, 512);
+}
+
+static uint16_t csum6(const uint8_t *src, const uint8_t *dst, uint8_t nh, const uint8_t *p, int n)
+{
+	uint32_t s = 0;
+	for (int i = 0; i < 16; i += 2) { s += (uint32_t)(src[i] << 8 | src[i + 1]); s += (uint32_t)(dst[i] << 8 | dst[i + 1]); }
+	s += (uint32_t)n; s += nh;
+	for (; n > 1; n -= 2, p += 2) s += (uint32_t)(p[0] << 8 | p[1]);
+	if (n) s += (uint32_t)(p[0] << 8);
+	while (s >> 16) s = (s & 0xFFFF) + (s >> 16);
+	return (uint16_t)~s;
+}
+
+/* an IPv6 packet from our link-local address; dst MAC from the address (multicast) or given */
+static uint8_t tx6[1600];
+static void send6(const uint8_t *dmac, const uint8_t *dst, uint8_t nh, int plen)
+{
+	uint8_t *e = tx6, *ip = tx6 + 14;
+	if (dmac) memcpy(e, dmac, 6);
+	else { e[0] = 0x33; e[1] = 0x33; memcpy(e + 2, dst + 12, 4); }
+	memcpy(e + 6, my_mac, 6); e[12] = 0x86; e[13] = 0xDD;
+	ip[0] = 0x60; ip[1] = ip[2] = ip[3] = 0; ip[4] = (uint8_t)(plen >> 8); ip[5] = (uint8_t)plen; ip[6] = nh; ip[7] = 255;
+	memcpy(ip + 8, my_ll, 16); memcpy(ip + 24, dst, 16);
+	uint8_t *p = ip + 40;
+	uint16_t c;
+	if (nh == 58) { p[2] = p[3] = 0; c = csum6(my_ll, dst, 58, p, plen); p[2] = (uint8_t)(c >> 8); p[3] = (uint8_t)c; }
+	if (nh == 17) { p[6] = p[7] = 0; c = csum6(my_ll, dst, 17, p, plen); if (!c) c = 0xFFFF; p[6] = (uint8_t)(c >> 8); p[7] = (uint8_t)c; }
+	eth_send(tx6, 14 + 40 + plen);
+}
+
+static void send_na(const uint8_t *dmac, const uint8_t *dst, int solicited)
+{
+	uint8_t *p = tx6 + 54;
+	memset(p, 0, 32);
+	p[0] = 136; p[4] = solicited ? 0x60 : 0x20;          /* NA: solicited + override, or just override */
+	memcpy(p + 8, my_ll, 16);
+	p[24] = 2; p[25] = 1; memcpy(p + 26, my_mac, 6);     /* target link-layer address */
+	send6(dmac, dst, 58, 32);
+	n_na_sent++;
+}
+
+/* DNS name from a dotted string ("Head Unit._airplay._tcp.local") */
+static int dns_put(uint8_t *o, const char *s)
+{
+	int k = 0;
+	while (*s) {
+		const char *e = s; while (*e && *e != '.') e++;
+		int l = (int)(e - s);
+		o[k++] = (uint8_t)l; memcpy(o + k, s, l); k += l;
+		s = *e ? e + 1 : e;
+	}
+	o[k++] = 0;
+	return k;
+}
+static int rr_head(uint8_t *o, const char *name, uint16_t type, uint16_t cls, uint32_t ttl)
+{
+	int k = dns_put(o, name);
+	o[k++] = (uint8_t)(type >> 8); o[k++] = (uint8_t)type; o[k++] = (uint8_t)(cls >> 8); o[k++] = (uint8_t)cls;
+	o[k++] = (uint8_t)(ttl >> 24); o[k++] = (uint8_t)(ttl >> 16); o[k++] = (uint8_t)(ttl >> 8); o[k++] = (uint8_t)ttl;
+	return k;                                            /* rdlength follows */
+}
+
+#define AP_INSTANCE "CarPlay._airplay._tcp.local"
+#define AP_HOST     "Computer.local"
+#define AP_PORT     7000
+static const char *const ap_txt[] = {          /* stock's TXT record, in stock's order */
+	"deviceid=00:11:22:AA:BB:CC",                    /* stock's constant placeholder */
+	"features=0x4040280,0x21",
+	"flags=0x4",
+	"model=AirPlayGeneric1,1",
+	"pi=5d1f7a2e-3c84-4b6a-9e21-f133c0ffee01",       /* our own pairing identity (stock keeps one per unit) */
+	"srcvers=320.14",
+};
+
+static void send_airplay_answer(void)
+{
+	uint8_t *u = tx6 + 54, *d = u + 8;
+	int k = 0;
+	memset(d, 0, 12);
+	d[2] = 0x84; d[7] = 4;                               /* response, authoritative; 4 answers */
+	k = 12;
+	/* PTR */
+	k += rr_head(d + k, "_airplay._tcp.local", 12, 1, 4500);
+	{ int at = k; k += 2; int n = dns_put(d + k, AP_INSTANCE); k += n; d[at] = (uint8_t)(n >> 8); d[at + 1] = (uint8_t)n; }
+	/* SRV */
+	k += rr_head(d + k, AP_INSTANCE, 33, 0x8001, 120);
+	{ int at = k; k += 2; d[k++] = 0; d[k++] = 0; d[k++] = 0; d[k++] = 0; d[k++] = AP_PORT >> 8; d[k++] = AP_PORT & 255;
+	  int n = 6 + dns_put(d + k, AP_HOST); k += n - 6; d[at] = (uint8_t)(n >> 8); d[at + 1] = (uint8_t)n; }
+	/* TXT */
+	k += rr_head(d + k, AP_INSTANCE, 16, 0x8001, 4500);
+	{ int at = k; k += 2; int n = 0;
+	  for (unsigned i = 0; i < sizeof ap_txt / sizeof ap_txt[0]; i++) { int l = 0; while (ap_txt[i][l]) l++; d[k + n++] = (uint8_t)l; memcpy(d + k + n, ap_txt[i], l); n += l; }
+	  k += n; d[at] = (uint8_t)(n >> 8); d[at + 1] = (uint8_t)n; }
+	/* AAAA */
+	k += rr_head(d + k, AP_HOST, 28, 0x8001, 120);
+	d[k++] = 0; d[k++] = 16; memcpy(d + k, my_ll, 16); k += 16;
+	int ul = 8 + k;
+	u[0] = 5353 >> 8; u[1] = 5353 & 255; u[2] = 5353 >> 8; u[3] = 5353 & 255; u[4] = (uint8_t)(ul >> 8); u[5] = (uint8_t)ul;
+	send6(0, mdns6, 17, ul);
+	n_mdns_ans++;
+}
+
+static void on_ip6(const uint8_t *f, int l)
+{
+	const uint8_t *ip = f + 14, *p = ip + 40;
+	int plen = ip[4] << 8 | ip[5];
+	if (l < 54 || 54 + plen > l) return;
+	if (ip[6] == 58 && plen >= 24) {                     /* ICMPv6 */
+		if (p[0] == 135 && !memcmp(p + 8, my_ll, 16)) {  /* neighbour solicitation for us */
+			n_ns++;
+			int dad = 1; for (int i = 0; i < 16; i++) if (ip[8 + i]) dad = 0;
+			if (dad) send_na(0, all6, 0); else send_na(f + 6, ip + 8, 1);
+		} else if (p[0] == 128 && !memcmp(ip + 24, my_ll, 16) && plen <= 1400) {   /* echo request */
+			n_ping6++;
+			memcpy(tx6 + 54, p, plen); tx6[54] = 129;
+			send6(f + 6, ip + 8, 58, plen);
+		}
+	} else if (ip[6] == 6 && plen >= 20 && !memcmp(ip + 24, my_ll, 16) && (p[13] & 0x02)) {   /* TCP SYN to us */
+		n_syn++;
+		uint16_t dp = (uint16_t)(p[2] << 8 | p[3]);
+		if (dp != syn_ports[0]) { for (int j = 3; j > 0; j--) syn_ports[j] = syn_ports[j - 1]; syn_ports[0] = dp; }
+	}
+}
+
 static void on_frame(const uint8_t *f, int l, uint16_t ty)
 {
+	if (ty == 0x86DD) on_ip6(f, l);
 	const uint8_t *u = 0; int ul = 0;
 	if (ty == 0x86DD && l >= 14 + 40 + 8 && f[20] == 17) { u = f + 54; ul = (f[18] << 8 | f[19]); }
 	else if (ty == 0x0800 && l >= 14 + 20 + 8 && f[23] == 17) {
@@ -718,6 +902,7 @@ static void on_frame(const uint8_t *f, int l, uint16_t ty)
 	if (!u || ul < 8 || u + ul > f + l) return;
 	int dp = u[2] << 8 | u[3];
 	if (dp == 5353) on_mdns(u + 8, ul - 8);
+	(void)0;
 	if (dp == 67) n_dhcp_req++;
 }
 
@@ -733,6 +918,14 @@ static void device_poll(void)
 		musb_send(4, nc, 8, 64);
 	}
 	if (g_config) iap2_poll();
+	static int was_up; static uint32_t up_at, last_ans;
+	if (ncm_on && !was_up) { up_at = millis(); }
+	was_up = ncm_on;
+	static int announced;
+	if (ncm_on && !announced && millis() - up_at > 500) { announced = 1; send_na(0, all6, 0); }   /* unsolicited NA */
+	static int n_announce;
+	if (ADVERTISE && ncm_on && n_announce < 3 && millis() - up_at > 1000u + 1000u * (uint32_t)n_announce) { n_announce++; send_airplay_answer(); }
+	if (ADVERTISE && ncm_on && want_airplay && millis() - last_ans > 1000) { want_airplay = 0; last_ans = millis(); send_airplay_answer(); }
 	static uint8_t ntb[2048 + 512];
 	static int nl;
 	if (ncm_on && musb_rx_ready(2)) {                    /* NCM bulk OUT: count frames and their types */
@@ -810,6 +1003,10 @@ static void status(void)
 		char s2[128], *q = str_cat(s2, "ident: sent "); q = str_u(q, (uint32_t)ident_len); q = str_cat(q, " bytes  ");
 		q = str_cat(q, ident_result == 1 ? "ACCEPTED" : ident_result == -1 ? "REJECTED:" : "waiting");
 		for (int i = 0; i < n_rej; i++) { *q++ = ' '; q = hexn(q, rej_ids[i], 4); }
+		if (have_time) {
+			q = str_cat(q, "   phone time "); q = fmt_time(q, t_secs + (uint64_t)((int64_t)(t_tz + t_dst) * 60));
+			q = str_cat(q, " (UTC"); *q++ = t_tz + t_dst < 0 ? '-' : '+'; q = str_u(q, (uint32_t)((t_tz + t_dst) < 0 ? -(t_tz + t_dst) : (t_tz + t_dst)) / 60); q = str_cat(q, ")");
+		}
 		gfx_text(30, 472, s2, &font16x32, 1, ident_result == 1 ? 0x40ff60 : ident_result < 0 ? 0xff6060 : 0xffffff);
 	}
 	gfx_text(30, 506, s, &font16x32, 1, auth_result == 1 || (cert_len && !auth_result) ? 0x40ff60 : (auth_result < 0 || mfi_stage) ? 0xff6060 : 0xffffff);
@@ -844,11 +1041,16 @@ static void status(void)
 		p = str_cat(p, " udp"); for (int i = 0; i < 4; i++) { *p++ = ' '; p = str_u(p, ports[i]); }
 		p = str_cat(p, "  mdns "); p = str_u(p, n_mdns); p = str_cat(p, " icmp6 "); p = str_u(p, n_icmp6);
 		gfx_text(30, 544, s, &font16x32, 1, n_frames ? 0x40ff60 : 0xffffff);
+		p = str_cat(s, "us fe80::f1:33ff:fe00:2  NS "); p = str_u(p, n_ns); p = str_cat(p, " NA "); p = str_u(p, n_na_sent);
+		p = str_cat(p, "  ping6 "); p = str_u(p, n_ping6); p = str_cat(p, "  mdns ans "); p = str_u(p, n_mdns_ans);
+		p = str_cat(p, "  SYN "); p = str_u(p, n_syn);
+		for (int i = 0; i < 4 && syn_ports[i]; i++) { *p++ = ' '; p = str_u(p, syn_ports[i]); }
+		gfx_text(30, 616, s, &font8x16, 1, n_syn ? 0x40ff60 : 0xffffff);
 		p = str_cat(s, "phone IPv4 "); for (int i = 0; i < 4; i++) { p = str_u(p, phone_ip4[i]); if (i < 3) *p++ = '.'; }
 		p = str_cat(p, "  DHCP requests "); p = str_u(p, n_dhcp_req);
 		gfx_text(30, 580, s, &font16x32, 1, 0xa0c0ff);
 		for (int i = 0; i < n_seen; i++)                 /* Q = phone asks, A = phone announces */
-			gfx_text(30 + (i / 4) * 420, 616 + (i % 4) * 26, seen[i], &font8x16, 1, seen[i][0] == 'Q' ? 0xffc040 : 0x40ff60);
+			gfx_text(30 + (i / 4) * 420, 638 + (i % 4) * 20, seen[i], &font8x16, 1, seen[i][0] == 'Q' ? 0xffc040 : 0x40ff60);
 	}
 	dcache_flush();
 	display_flip(fb);
