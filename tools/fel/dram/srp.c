@@ -2,9 +2,9 @@
    implementations; confirm against docs/carplay-pairing.md):
      k  = H(N | PAD(g))          x = H(salt | H(user ":" pass))     v = g^x
      B  = k*v + g^b              u = H(PAD(A) | PAD(B))              S = (A * v^u)^b
-     K  = H(S)                   M1 = H((H(N) xor H(g)) | H(user) | salt | A | B | K)
-     M2 = H(A | M1 | K)
-   where numbers inside K, M1 and M2 are hashed without leading zero bytes. */
+     K  = H(S)                   M1 = H((H(N) xor H(g)) | H(user) | salt | PAD(A) | PAD(B) | K)
+     M2 = H(PAD(A) | M1 | K)
+   where S inside K is hashed without leading zero bytes (docs/carplay-pairing.md). */
 #include "srp.h"
 #include "third_party/monocypher/monocypher-ed25519.h"
 
@@ -135,16 +135,16 @@ int srp_finish(srp_server *s, const uint8_t *A, int alen, const uint8_t M1[64])
 	crypto_sha512_update(&c, h, 64);
 	crypto_sha512_update(&c, hu, 64);
 	crypto_sha512_update(&c, s->salt, 16);
-	hash_num(&c, Ap, BN_BYTES);
-	hash_num(&c, s->Bbytes, BN_BYTES);
+	crypto_sha512_update(&c, Ap, BN_BYTES);             /* PAD(A), PAD(B) (docs/carplay-pairing.md) */
+	crypto_sha512_update(&c, s->Bbytes, BN_BYTES);
 	crypto_sha512_update(&c, s->K, 64);
 	crypto_sha512_final(&c, m1);
 	uint8_t d = 0;
 	for (int i = 0; i < 64; i++) d |= (uint8_t)(m1[i] ^ M1[i]);
 	if (d) return -2;
 
-	crypto_sha512_init(&c);                             /* M2 = H(A | M1 | K) */
-	hash_num(&c, Ap, BN_BYTES);
+	crypto_sha512_init(&c);                             /* M2 = H(PAD(A) | M1 | K) */
+	crypto_sha512_update(&c, Ap, BN_BYTES);
 	crypto_sha512_update(&c, m1, 64);
 	crypto_sha512_update(&c, s->K, 64);
 	crypto_sha512_final(&c, s->M2);

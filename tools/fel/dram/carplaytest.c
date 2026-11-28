@@ -939,7 +939,8 @@ static char req_lines[2][72]; static int n_req;      /* last two request lines *
 static uint32_t n_enc_rx;                            /* bytes after pair-verify (encrypted channel) */
 static const char *pair_status = "";
 static int ps_last, pv_last;                         /* last pairing step reached */
-static uint32_t pair_ms;                             /* time spent in the last pairing step */
+static uint32_t pair_ms;
+static char first_ctype[40];                             /* time spent in the last pairing step */
 
 static int s_eq(const char *a, const char *b) { while (*a && *a == *b) { a++; b++; } return *a == *b; }
 static void mmove(uint8_t *d, const uint8_t *s, int n) { for (int i = 0; i < n; i++) d[i] = s[i]; }   /* d < s only */
@@ -1028,6 +1029,8 @@ static void handle_requests(void)
 				n_req++;
 			} else if (hdr_is(line, "Content-Length")) {
 				const char *v = line + 15; while (*v == ' ') v++; while (*v >= '0' && *v <= '9') clen = clen * 10 + (*v++ - '0');
+			} else if (hdr_is(line, "Content-Type") && !first_ctype[0]) {
+				const char *v = line + 13; int a = 0; while (*v == ' ') v++; while (*v && a < 39) first_ctype[a++] = *v++; first_ctype[a] = 0;
 			} else if (hdr_is(line, "CSeq")) {
 				const char *v = line + 5; int a = 0; while (*v == ' ') v++; while (*v && a < 15) cseq[a++] = *v++; cseq[a] = 0;
 			}
@@ -1042,7 +1045,7 @@ static void handle_requests(void)
 			r = pair_setup(&pc, body, clen, out, sizeof out);
 			pair_ms = millis() - t0;
 			ps_last = pc.ps_state;
-			pair_status = pc.last_err ? "pair-setup FAILED" : pc.ps_state == 6 ? "PAIRED (setup M6 sent)" : pc.ps_state == 4 ? "PIN proof OK (M4 sent)" : "pair-setup M2 sent";
+			pair_status = pc.last_err ? "pair-setup FAILED" : pc.ps_state == 6 ? "PAIRED (setup M6 sent)" : pc.ps_state == 4 ? (pc.transient ? "PIN proof OK, transient: PAIRED" : "PIN proof OK (M4 sent)") : "pair-setup M2 sent";
 		} else if (s_eq(path, "/pair-verify")) {
 			uint32_t t0 = millis();
 			r = pair_verify(&pc, body, clen, out, sizeof out);
@@ -1140,7 +1143,7 @@ static void crypto_selftest(void)
 	kat_ok = !memcmp(k.ltpk, want_pk, 8) && !memcmp(h, want_hb, 8);
 }
 
-#define PAIR_ID "02:f1:33:00:00:02"
+#define PAIR_ID "5d1f7a2e-3c84-4b6a-9e21-f133c0ffee01"   /* = the pi we advertise */
 static void pairing_init(void)                      /* long-term key from this chip's unique ID */
 {
 	uint8_t sid[16], seed[64];
@@ -1372,6 +1375,9 @@ static void status(void)
 				p = str_cat(p, "  ("); p = str_u(p, pair_ms); p = str_cat(p, " ms)");
 				if (n_enc_rx) { p = str_cat(p, "  encrypted rx "); p = str_u(p, n_enc_rx); }
 				gfx_text(30, 160, s, &font16x32, 1, pc.last_err ? 0xff6060 : 0x40ff60);
+				p = str_cat(s, "M1:"); for (int i = 0; i < pc.m1_len; i++) { *p++ = ' '; p = hexn(p, pc.m1[i], 2); }
+				p = str_cat(p, "   type "); p = str_cat(p, first_ctype);
+				gfx_text(30, 196, s, &font8x16, 1, 0xa0c0ff);
 			}
 		}
 		p = str_cat(s, "phone IPv4 "); for (int i = 0; i < 4; i++) { p = str_u(p, phone_ip4[i]); if (i < 3) *p++ = '.'; }

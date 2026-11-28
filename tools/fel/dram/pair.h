@@ -25,6 +25,8 @@ typedef struct {
 	uint8_t pv_sec[32], pv_pub[32], pv_peer[32], pv_shared[32], pv_key[32];
 	int verified;                      /* pair-verify finished: pv_shared is the session secret */
 	int last_err;                      /* where it failed, for the screen */
+	int transient;                     /* M1 asked for transient pairing (flag 0x10) */
+	uint8_t m1[16]; int m1_len;        /* the phone's first pair-setup message (state/method/flags only) */
 } pair_ctx;
 
 /* seed: 32 bytes the long-term key is derived from (fixed per unit) */

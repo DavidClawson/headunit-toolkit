@@ -97,7 +97,7 @@ void pair_init(pair_ctx *p, const uint8_t seed[32], const char *id, const char *
 	cpy(s, seed, 32);                                   /* key_pair wipes its seed */
 	crypto_ed25519_key_pair(p->ltsk, p->ltpk, s);
 	p->rng = rng; p->id = id; p->pin = pin;
-	p->ps_state = 0; p->pv_state = 0; p->have_ctrl = 0; p->verified = 0; p->last_err = 0;
+	p->ps_state = 0; p->pv_state = 0; p->transient = 0; p->m1_len = 0; p->have_ctrl = 0; p->verified = 0; p->last_err = 0;
 }
 
 int pair_setup(pair_ctx *p, const uint8_t *in, int n, uint8_t *out, int cap)
@@ -107,7 +107,10 @@ int pair_setup(pair_ctx *p, const uint8_t *in, int n, uint8_t *out, int cap)
 	if (tlv_get(in, n, T_STATE, &st, 1) != 1) return -1;
 
 	if (st == 1) {                                      /* M1 -> M2: salt and B */
-		uint8_t salt[16], b[32];
+		uint8_t salt[16], b[32], fl[4] = { 0 };
+		int fn = tlv_get(in, n, T_FLAGS, fl, 4);
+		p->transient = fn > 0 && (fl[0] & 0x10);        /* transient: stop after M4 */
+		p->m1_len = n > 16 ? 16 : n; cpy(p->m1, in, p->m1_len);
 		p->rng(salt, 16); p->rng(b, 32);
 		srp_start(&p->srp, "Pair-Setup", p->pin, salt, b);
 		crypto_wipe(b, 32);
@@ -124,6 +127,7 @@ int pair_setup(pair_ctx *p, const uint8_t *in, int n, uint8_t *out, int cap)
 		if (al <= 0 || tlv_get(in, n, T_PROOF, M1, 64) != 64) return error_reply(p, out, cap, 4, 31);
 		if (srp_finish(&p->srp, buf, al, M1)) return error_reply(p, out, cap, 4, 32);   /* wrong PIN */
 		p->ps_state = 4;
+		if (p->transient) p->verified = 1;              /* session secret: K (no long-term keys) */
 		int o = put_u8(out, 0, cap, T_STATE, 4);
 		return tlv_put(out, o, cap, T_PROOF, p->srp.M2, 64);
 	}

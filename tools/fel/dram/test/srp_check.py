@@ -18,8 +18,8 @@ for trial in range(20):
     S = pow(B - k * pow(g, x, N), a + u * x, N)            # client side
     K = H(i2b(S))
     hx = bytes(p ^ q for p, q in zip(H(i2b(N)), H(i2b(g))))
-    M1 = H(hx, H(I), salt, i2b(A), i2b(B), K)
-    M2 = H(i2b(A), M1, K)
+    M1 = H(hx, H(I), salt, i2b(A, L), i2b(B, L), K)
+    M2 = H(i2b(A, L), M1, K)
     out = subprocess.run(['./srp_host', 'F', salt.hex(), bsec.hex(), i2b(A).hex(), M1.hex()], capture_output=True, text=True).stdout.split()
     ok = out[0] == '0' and out[1] == K.hex() and out[2] == M2.hex()
     # a wrong proof must be rejected

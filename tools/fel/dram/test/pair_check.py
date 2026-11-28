@@ -44,10 +44,10 @@ def pair_setup(acc, pin, ctrl_key, ctrl_id):
     u = int.from_bytes(H(i2b(A, L), i2b(B, L)), 'big')
     K = H(i2b(pow(B - k * pow(g, x, N), a + u * x, N)))
     hx = bytes(p ^ q for p, q in zip(H(i2b(N)), H(i2b(g))))
-    M1 = H(hx, H(I), salt, i2b(A), i2b(B), K)
+    M1 = H(hx, H(I), salt, i2b(A, L), i2b(B, L), K)
     r, err, _ = acc.ask('S', tlv((6, b'\x03'), (3, i2b(A)), (4, M1)))
     if 7 in r: return 'M4 error %d' % err
-    assert r[4] == H(i2b(A), M1, K), 'M2 proof wrong'
+    assert r[4] == H(i2b(A, L), M1, K), 'M2 proof wrong'
     key = hkdf(K, 'Pair-Setup-Encrypt-Salt', 'Pair-Setup-Encrypt-Info')
     X = hkdf(K, 'Pair-Setup-Controller-Sign-Salt', 'Pair-Setup-Controller-Sign-Info')
     pk = raw(ctrl_key.public_key())
