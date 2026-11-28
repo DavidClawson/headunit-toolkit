@@ -19,6 +19,7 @@
 #include "gfx.h"
 #include "twi.h"
 #include "pair.h"
+#include "hashes.h"
 #include "third_party/monocypher/monocypher.h"
 #include "third_party/monocypher/monocypher-ed25519.h"
 
@@ -985,19 +986,94 @@ static void tcp_poll(void)                          /* retransmit after 300 ms w
 	if (tcp_state == 2 && txq_n && millis() - tcp_last_tx > 300) { n_retx++; tcp_flush(1); }
 }
 
-static void respond(const char *proto, const char *cseq, const uint8_t *body, int n)
+/* the encrypted control channel after pair-verify (docs/carplay-pairing.md):
+   frames of [u16 LE length = AAD][ChaCha20-Poly1305 ciphertext][16-byte tag],
+   nonce = 4 zero bytes + 64-bit LE counter per direction */
+static int enc_on;
+static uint8_t ck_read[32], ck_write[32];
+static uint64_t rd_ctr, wr_ctr;
+static uint8_t eb[0x4000 + 64]; static int eb_n;     /* encrypted bytes not yet decrypted */
+static uint32_t n_ef_in, n_ef_bad, n_ef_out;
+static void enc_start(void)
+{
+	const uint8_t *sec = pc.transient ? pc.srp.K : pc.pv_shared;
+	int sl = pc.transient ? 64 : 32;
+	crypto_sha512_hkdf(ck_read, 32, sec, (size_t)sl, (const uint8_t *)"Control-Salt", 12, (const uint8_t *)"Control-Write-Encryption-Key", 28);
+	crypto_sha512_hkdf(ck_write, 32, sec, (size_t)sl, (const uint8_t *)"Control-Salt", 12, (const uint8_t *)"Control-Read-Encryption-Key", 27);
+	rd_ctr = wr_ctr = 0; eb_n = 0; enc_on = 1;
+}
+static void ctr_nonce(uint8_t n[12], uint64_t c) { for (int i = 0; i < 4; i++) n[i] = 0; for (int i = 0; i < 8; i++) n[4 + i] = (uint8_t)(c >> (8 * i)); }
+
+static void send_maybe_enc(const uint8_t *d, int n)
+{
+	if (!enc_on) { tcp_write(d, n); return; }
+	static uint8_t fr[0x4000 + 18];
+	while (n > 0) {
+		int k = n > 0x4000 ? 0x4000 : n;
+		uint8_t nonce[12]; crypto_aead_ctx x;
+		fr[0] = (uint8_t)k; fr[1] = (uint8_t)(k >> 8);
+		ctr_nonce(nonce, wr_ctr++);
+		crypto_aead_init_ietf(&x, ck_write, nonce);
+		crypto_aead_write(&x, fr + 2, fr + 2 + k, fr, 2, d, (size_t)k);
+		tcp_write(fr, 2 + k + 16);
+		n_ef_out++;
+		d += k; n -= k;
+	}
+}
+
+static void respond_t(const char *proto, const char *cseq, const char *ctype, const uint8_t *body, int n)
 {
 	static char h[256];
-	char *q = str_cat(h, proto); q = str_cat(q, " 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: ");
+	char *q = str_cat(h, proto); q = str_cat(q, " 200 OK\r\nContent-Length: ");
 	q = str_u(q, (uint32_t)n);
+	if (n) { q = str_cat(q, "\r\nContent-Type: "); q = str_cat(q, ctype); }
 	if (cseq[0]) { q = str_cat(q, "\r\nCSeq: "); q = str_cat(q, cseq); }
 	q = str_cat(q, "\r\nServer: AirTunes/320.14\r\n\r\n");
 	static uint8_t all[4096];
 	int hl = (int)(q - h);
 	if (hl + n > (int)sizeof all) return;
 	memcpy(all, h, (size_t)hl); if (n) memcpy(all + hl, body, (size_t)n);
-	tcp_write(all, hl + n);
+	send_maybe_enc(all, hl + n);
 }
+static void respond(const char *proto, const char *cseq, const uint8_t *body, int n)
+{
+	respond_t(proto, cseq, "application/pairing+tlv8", body, n);
+}
+
+static void dev_rng(uint8_t *o, int n);
+/* auth-setup (MFi-SAP): prove the MFi chip is present, bound to this session's X25519 keys */
+static const char *auth_status = "";
+static uint32_t auth_ms;
+static int auth_setup(const uint8_t *body, int n, uint8_t *out, int cap)
+{
+	if (n != 33 || body[0] != 0x01) { auth_status = "auth-setup: unexpected body"; return -1; }
+	uint32_t t0 = millis();
+	uint8_t esec[32], epub[32], sh[32], m[64], dg[32], kin[7 + 32], key[20], iv[20];
+	dev_rng(esec, 32);
+	crypto_x25519_public_key(epub, esec);
+	crypto_x25519(sh, esec, body + 1);
+	crypto_wipe(esec, 32);
+	memcpy(m, epub, 32); memcpy(m + 32, body + 1, 32);   /* ours, then the phone's */
+	sha256(dg, m, 64);
+	if (mfi_sign(dg, 32)) { auth_status = "auth-setup: MFi signing FAILED"; return -1; }
+	memcpy(kin, "AES-KEY", 7); memcpy(kin + 7, sh, 32); sha1(key, kin, 39);
+	memcpy(kin, "AES-IV", 6);  memcpy(kin + 6, sh, 32); sha1(iv, kin, 38);
+	crypto_wipe(sh, 32);
+	int need = 32 + 4 + cert_len + 4 + sig_len;
+	if (need > cap || !cert_len) { auth_status = "auth-setup: no certificate"; return -1; }
+	int o = 0;
+	memcpy(out, epub, 32); o = 32;
+	out[o++] = (uint8_t)(cert_len >> 24); out[o++] = (uint8_t)(cert_len >> 16); out[o++] = (uint8_t)(cert_len >> 8); out[o++] = (uint8_t)cert_len;
+	memcpy(out + o, cert, (size_t)cert_len); o += cert_len;
+	out[o++] = 0; out[o++] = 0; out[o++] = (uint8_t)(sig_len >> 8); out[o++] = (uint8_t)sig_len;
+	memcpy(out + o, sig, (size_t)sig_len);
+	aes128_ctr(key, iv, out + o, sig_len); o += sig_len;
+	auth_ms = millis() - t0;
+	auth_status = "auth-setup: chip signed, reply sent";
+	return o;
+}
+
+static void enc_input(const uint8_t *d, int n);
 
 static int hdr_is(const char *l, const char *name)  /* case-insensitive "Name:" prefix */
 {
@@ -1052,11 +1128,41 @@ static void handle_requests(void)
 			pair_ms = millis() - t0;
 			pv_last = pc.pv_state;
 			pair_status = pc.last_err ? "pair-verify FAILED" : pc.verified ? "VERIFIED: session keys ready" : "pair-verify M2 sent";
+		} else if (s_eq(path, "/auth-setup")) {
+			int a = auth_setup(body, clen, out, sizeof out);
+			if (a >= 0) respond_t(proto, cseq, "application/octet-stream", out, a);
 		}
 		if (r >= 0) respond(proto, cseq, out, r);
 		int used = he + clen;
 		mmove(rq, rq + used, rq_n - used); rq_n -= used;
-		if (pc.verified) { n_enc_rx += (uint32_t)rq_n; rq_n = 0; return; }   /* the rest is encrypted */
+		if (pc.verified && !enc_on) {                   /* from here on the channel is encrypted */
+			enc_start();
+			int left = rq_n; rq_n = 0;
+			if (left) enc_input(rq, left);
+			return;
+		}
+	}
+}
+
+static void enc_input(const uint8_t *d, int n)
+{
+	n_enc_rx += (uint32_t)n;
+	if (eb_n + n > (int)sizeof eb) { n_ef_bad++; eb_n = 0; return; }
+	memcpy(eb + eb_n, d, (size_t)n); eb_n += n;
+	for (;;) {
+		if (eb_n < 2) return;
+		int len = eb[0] | eb[1] << 8;
+		if (len > 0x4000) { n_ef_bad++; eb_n = 0; return; }
+		if (eb_n < 2 + len + 16) return;
+		uint8_t nonce[12]; crypto_aead_ctx x;
+		ctr_nonce(nonce, rd_ctr);
+		crypto_aead_init_ietf(&x, ck_read, nonce);
+		if (rq_n + len > (int)sizeof rq ||
+		    crypto_aead_read(&x, rq + rq_n, eb + 2 + len, eb, 2, eb + 2, (size_t)len)) { n_ef_bad++; eb_n = 0; return; }
+		rd_ctr++; n_ef_in++; rq_n += len;
+		int used = 2 + len + 16;
+		mmove(eb, eb + used, eb_n - used); eb_n -= used;
+		handle_requests();
 	}
 }
 
@@ -1075,7 +1181,7 @@ static void on_tcp(const uint8_t *f, const uint8_t *ip, const uint8_t *p, int pl
 			tcp_rcv_nxt = seq + 1; tcp_state = 1; n_conn++;
 			tcp_iss += 0x10000;
 			tcp_snd_una = tcp_snd_nxt = tcp_iss + 1; txq_n = 0; rq_n = 0;
-			pc.verified = 0;                            /* a new connection starts unencrypted */
+			pc.verified = 0; enc_on = 0;                /* a new connection starts unencrypted */
 		}
 		tcp_seg(0x12, tcp_iss, 0, 0, 1);                /* SYN+ACK */
 		return;
@@ -1093,10 +1199,12 @@ static void on_tcp(const uint8_t *f, const uint8_t *ip, const uint8_t *p, int pl
 	if (dl > 0) {
 		if (seq == tcp_rcv_nxt) {
 			tcp_rcv_nxt += (uint32_t)dl; tcp_rx_bytes += (uint32_t)dl;
-			if (pc.verified) n_enc_rx += (uint32_t)dl;
-			else if (rq_n + dl <= (int)sizeof rq) { memcpy(rq + rq_n, p + hl, (size_t)dl); rq_n += dl; }
 			tcp_seg(0x10, tcp_snd_nxt, 0, 0, 0);        /* ACK before the (slow) pairing maths */
-			if (!pc.verified) handle_requests();
+			if (enc_on) enc_input(p + hl, dl);
+			else {
+				if (rq_n + dl <= (int)sizeof rq) { memcpy(rq + rq_n, p + hl, (size_t)dl); rq_n += dl; }
+				handle_requests();
+			}
 		} else tcp_seg(0x10, tcp_snd_nxt, 0, 0, 0);     /* re-ACK out-of-order or duplicate data */
 	}
 	if ((fl & 0x01) && seq + (uint32_t)(dl > 0 ? dl : 0) == tcp_rcv_nxt) {   /* FIN */
@@ -1377,8 +1485,15 @@ static void status(void)
 				p = str_cat(s, pair_status);
 				if (pc.last_err) { p = str_cat(p, " at "); p = str_u(p, (uint32_t)pc.last_err); }
 				p = str_cat(p, "  ("); p = str_u(p, pair_ms); p = str_cat(p, " ms)");
-				if (n_enc_rx) { p = str_cat(p, "  encrypted rx "); p = str_u(p, n_enc_rx); }
-				gfx_text(30, 160, s, &font16x32, 1, pc.last_err ? 0xff6060 : 0x40ff60);
+				if (n_enc_rx) {
+					p = str_cat(p, "  enc frames in "); p = str_u(p, n_ef_in); p = str_cat(p, " bad "); p = str_u(p, n_ef_bad);
+					p = str_cat(p, " out "); p = str_u(p, n_ef_out);
+				}
+				gfx_text(30, 160, s, &font16x32, 1, pc.last_err || n_ef_bad ? 0xff6060 : 0x40ff60);
+			}
+			if (auth_status[0]) {
+				p = str_cat(s, auth_status); p = str_cat(p, "  ("); p = str_u(p, auth_ms); p = str_cat(p, " ms)");
+				gfx_text(30, 196, s, &font8x16, 1, 0x40ff60);
 			}
 		}
 		p = str_cat(s, "phone IPv4 "); for (int i = 0; i < 4; i++) { p = str_u(p, phone_ip4[i]); if (i < 3) *p++ = '.'; }

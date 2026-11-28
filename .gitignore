@@ -36,3 +36,4 @@ dist/
 tools/fel/dram/test/srp_host
 tools/fel/dram/test/pair_host
 tools/fel/dram/test/kat_host
+tools/fel/dram/test/hashes_host
