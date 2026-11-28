@@ -824,6 +824,7 @@ static void send6(const uint8_t *dmac, const uint8_t *dst, uint8_t nh, int plen)
 	uint8_t *p = ip + 40;
 	uint16_t c;
 	if (nh == 58) { p[2] = p[3] = 0; c = csum6(my_ll, dst, 58, p, plen); p[2] = (uint8_t)(c >> 8); p[3] = (uint8_t)c; }
+	if (nh == 6) { p[16] = p[17] = 0; c = csum6(my_ll, dst, 6, p, plen); p[16] = (uint8_t)(c >> 8); p[17] = (uint8_t)c; }
 	if (nh == 17) { p[6] = p[7] = 0; c = csum6(my_ll, dst, 17, p, plen); if (!c) c = 0xFFFF; p[6] = (uint8_t)(c >> 8); p[7] = (uint8_t)c; }
 	eth_send(tx6, 14 + 40 + plen);
 }
@@ -919,6 +920,90 @@ static void ask_phone(void)                                 /* mDNS query: _remo
 	send6(0, mdns6, 17, ul);
 }
 
+/* Minimal TCP, one connection on the AirPlay port. It accepts the connection and
+   acknowledges data so we can see the phone's first requests; it sends nothing back
+   at the HTTP/RTSP level yet. Only request lines and Content-Type/Length are kept
+   (other headers can carry phone identifiers). */
+static int tcp_state;                     /* 0 listen, 1 SYN received, 2 established, 3 closed by peer */
+static uint8_t tcp_peer_mac[6], tcp_peer[16];
+static uint16_t tcp_pport;
+static uint32_t tcp_iss = 0x0F133000, tcp_snd_nxt, tcp_rcv_nxt, tcp_rx_bytes, n_conn, n_fin, n_rst_in;
+static char req_lines[4][72]; static int n_req;
+static char req_ctype[48]; static uint32_t req_clen; static int req_hdr_done;
+static char tcp_line[160]; static int tcp_line_n;
+static void tcp_send(uint8_t flags, int mss)
+{
+	uint8_t *p = tx6 + 54;
+	int hl = mss ? 24 : 20;
+	memset(p, 0, (size_t)hl);
+	p[0] = (uint8_t)(AP_PORT >> 8); p[1] = (uint8_t)AP_PORT; p[2] = (uint8_t)(tcp_pport >> 8); p[3] = (uint8_t)tcp_pport;
+	uint32_t s = tcp_snd_nxt, a = tcp_rcv_nxt;
+	p[4] = (uint8_t)(s >> 24); p[5] = (uint8_t)(s >> 16); p[6] = (uint8_t)(s >> 8); p[7] = (uint8_t)s;
+	p[8] = (uint8_t)(a >> 24); p[9] = (uint8_t)(a >> 16); p[10] = (uint8_t)(a >> 8); p[11] = (uint8_t)a;
+	p[12] = (uint8_t)(hl / 4 << 4); p[13] = flags; p[14] = 0x20; p[15] = 0x00;   /* window 8192 */
+	if (mss) { p[20] = 2; p[21] = 4; p[22] = (uint8_t)(1400 >> 8); p[23] = (uint8_t)(1400 & 255); }
+	send6(tcp_peer_mac, tcp_peer, 6, hl);
+}
+static void tcp_text_line(void)                    /* one header line of the phone's request */
+{
+	tcp_line[tcp_line_n] = 0;
+	if (!req_hdr_done && tcp_line_n == 0) { req_hdr_done = 1; return; }
+	if (!req_hdr_done) {
+		const char *l = tcp_line;
+		int first = 1;
+		for (int i = 0; i < 4 && l[i]; i++) if (l[i] == ':') first = 0;
+		int sp = 0; for (int i = 0; l[i]; i++) if (l[i] == ' ') sp++;
+		if (sp >= 2 && (!memcmp(l + tcp_line_n - 8, "RTSP/1.0", 8) || !memcmp(l + tcp_line_n - 8, "HTTP/1.1", 8) || !memcmp(l + tcp_line_n - 8, "HTTP/1.0", 8)) && first && n_req < 4) {
+			int k = 0; while (l[k] && k < 71) { req_lines[n_req][k] = l[k]; k++; } req_lines[n_req][k] = 0; n_req++;
+		} else if (!memcmp(l, "Content-Type:", 13) || !memcmp(l, "content-type:", 13)) {
+			int k = 0; const char *v = l + 13; while (*v == ' ') v++; while (v[k] && k < 47) { req_ctype[k] = v[k]; k++; } req_ctype[k] = 0;
+		} else if (!memcmp(l, "Content-Length:", 15) || !memcmp(l, "content-length:", 15)) {
+			const char *v = l + 15; uint32_t x = 0; while (*v == ' ') v++; while (*v >= '0' && *v <= '9') x = x * 10 + (uint32_t)(*v++ - '0'); req_clen = x;
+		}
+	}
+}
+static void tcp_data(const uint8_t *d, int n)
+{
+	for (int i = 0; i < n; i++) {
+		uint8_t c = d[i];
+		if (req_hdr_done) continue;                    /* body (binary) is only counted */
+		if (c == '\r') continue;
+		if (c == '\n') { tcp_text_line(); tcp_line_n = 0; continue; }
+		if (tcp_line_n < (int)sizeof tcp_line - 1) tcp_line[tcp_line_n++] = (c >= 32 && c < 127) ? (char)c : '.';
+	}
+}
+static void on_tcp(const uint8_t *f, const uint8_t *ip, const uint8_t *p, int plen)
+{
+	uint16_t sp = (uint16_t)(p[0] << 8 | p[1]);
+	uint8_t fl = p[13];
+	uint32_t seq = (uint32_t)p[4] << 24 | (uint32_t)p[5] << 16 | (uint32_t)p[6] << 8 | p[7];
+	int hl = (p[12] >> 4) * 4;
+	if (hl < 20 || hl > plen) return;
+	if (fl & 0x04) { if (sp == tcp_pport) { n_rst_in++; tcp_state = 0; } return; }
+	if (fl & 0x02) {                                    /* SYN: (re)start the connection */
+		if (tcp_state == 0 || sp != tcp_pport || tcp_state == 3) {
+			memcpy(tcp_peer_mac, f + 6, 6); memcpy(tcp_peer, ip + 8, 16); tcp_pport = sp;
+			tcp_rcv_nxt = seq + 1; tcp_snd_nxt = tcp_iss; tcp_state = 1; n_conn++;
+			req_hdr_done = 0; tcp_line_n = 0;
+		}
+		uint32_t s = tcp_snd_nxt; tcp_snd_nxt = tcp_iss;
+		tcp_send(0x12, 1);                              /* SYN+ACK */
+		tcp_snd_nxt = s == tcp_iss ? tcp_iss + 1 : s;
+		return;
+	}
+	if (sp != tcp_pport || tcp_state == 0) return;
+	if ((fl & 0x10) && tcp_state == 1) tcp_state = 2;
+	int dl = plen - hl;
+	if (dl > 0) {
+		if (seq == tcp_rcv_nxt) { tcp_data(p + hl, dl); tcp_rcv_nxt += (uint32_t)dl; tcp_rx_bytes += (uint32_t)dl; }
+		tcp_send(0x10, 0);                              /* ACK (also re-ACKs duplicates) */
+	}
+	if ((fl & 0x01) && seq + (uint32_t)(dl > 0 ? dl : 0) == tcp_rcv_nxt) {   /* FIN */
+		tcp_rcv_nxt++; n_fin++; tcp_state = 3;
+		tcp_send(0x11, 0); tcp_snd_nxt++;               /* FIN+ACK */
+	}
+}
+
 static void on_ip6(const uint8_t *f, int l)
 {
 	const uint8_t *ip = f + 14, *p = ip + 40;
@@ -936,10 +1021,13 @@ static void on_ip6(const uint8_t *f, int l)
 			memcpy(tx6 + 54, p, plen); tx6[54] = 129;
 			send6(f + 6, ip + 8, 58, plen);
 		}
-	} else if (ip[6] == 6 && plen >= 20 && !memcmp(ip + 24, my_ll, 16) && (p[13] & 0x02)) {   /* TCP SYN to us */
-		n_syn++;
+	} else if (ip[6] == 6 && plen >= 20 && !memcmp(ip + 24, my_ll, 16)) {   /* TCP to us */
 		uint16_t dp = (uint16_t)(p[2] << 8 | p[3]);
-		if (dp != syn_ports[0]) { for (int j = 3; j > 0; j--) syn_ports[j] = syn_ports[j - 1]; syn_ports[0] = dp; }
+		if (p[13] & 0x02) {
+			n_syn++;
+			if (dp != syn_ports[0]) { for (int j = 3; j > 0; j--) syn_ports[j] = syn_ports[j - 1]; syn_ports[0] = dp; }
+		}
+		if (dp == AP_PORT) on_tcp(f, ip, p, plen);
 	}
 }
 
@@ -1108,6 +1196,16 @@ static void status(void)
 		p = str_cat(p, "  mdns resp "); p = str_u(p, n_mdns_resp);
 		for (int i = 0; i < 4 && syn_ports[i]; i++) { *p++ = ' '; p = str_u(p, syn_ports[i]); }
 		gfx_text(30, 616, s, &font8x16, 1, n_syn ? 0x40ff60 : 0xffffff);
+		{
+			static const char *const st[] = { "listen", "SYN rcvd", "ESTABLISHED", "closed by phone" };
+			p = str_cat(s, "TCP 7000: "); p = str_cat(p, st[tcp_state]); p = str_cat(p, "  conns "); p = str_u(p, n_conn);
+			p = str_cat(p, "  rx "); p = str_u(p, tcp_rx_bytes); p = str_cat(p, " B  fin "); p = str_u(p, n_fin); p = str_cat(p, " rst "); p = str_u(p, n_rst_in);
+			if (req_ctype[0]) { p = str_cat(p, "  type "); p = str_cat(p, req_ctype); }
+			if (req_clen) { p = str_cat(p, "  len "); p = str_u(p, req_clen); }
+			p = str_cat(p, "  requests "); p = str_u(p, (uint32_t)n_req);
+			gfx_text(30, 88, s, &font16x32, 1, tcp_state >= 2 ? 0x40ff60 : 0xffffff);
+			for (int i = 0; i < n_req && i < 2; i++) gfx_text(30, 124 + i * 36, req_lines[i], &font16x32, 1, 0xffff60);
+		}
 		p = str_cat(s, "phone IPv4 "); for (int i = 0; i < 4; i++) { p = str_u(p, phone_ip4[i]); if (i < 3) *p++ = '.'; }
 		p = str_cat(p, "  DHCP requests "); p = str_u(p, n_dhcp_req);
 		p = str_cat(p, "   CarPlay avail x"); p = str_u(p, (uint32_t)n_avail);
