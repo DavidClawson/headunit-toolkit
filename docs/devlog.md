@@ -1000,12 +1000,132 @@ iPhone:
 | Identification | done | stock's layout, `1D02` accepted |
 | Power and time messages | done | `AE00`/`AE03` out, `4E0B` and `AE01` in |
 | NCM link | done | phone selects alt 1; DHCP and mDNS traffic |
-| Our side of the link | next | IPv6 ND, address, mDNS `_airplay._tcp` |
-| CarPlay control connection | todo | to the phone's `_carplay-ctrl._tcp` |
-| AirPlay/CarPlay session | todo | pairing, MFi-SAP, H.264 video, audio |
+| Our side of the link | done | IPv6 link-local, ND, mDNS `_airplay._tcp` (see below) |
+| CarPlay start (`0x4300`/`0x4301`) | done | phone connects to our port 7000 |
+| Pairing (pair-setup, pair-verify) | done | SRP-6a 3072, Ed25519, X25519; our own code + Monocypher |
+| Encrypted control channel, MFi-SAP | done | phone accepts the chip's signature |
+| CarPlay session (SETUP, /info, RECORD, screen stream) | done | H.264 High L3.1 1280×720 arrives and decrypts |
+| H.264 decode on the VE, touch, audio | next | `docs/video-decode.md` |
 
 The last two rows are where hosting stock's `carplay.mod` (the chosen
 direction, `docs/carplay-host.md`) or a large amount of our own code comes
 in. Everything above them is now ours and understood. It is also the part
 the module expects its host to provide: the USB gadget, the role switch, and
 the iAP2 and NCM transport (`MIoctrl` 13).
+
+**What the iPhone does on the CarPlay link (2026-11-27).** `carplaytest.c`
+now decodes mDNS on the NCM link, read-only. It keeps only service-type
+names: instance names can contain the phone's name and are never stored or
+shown.
+
+About 30 s after NCM comes up, the phone:
+- **queries (looks for):** `_airplay._tcp`, `_raop._tcp`, `_airplay-bds._tcp`,
+  `_companion-link._tcp`, `_rdlink._tcp`, `_hap._tcp`, `_hap._udp`, and `ANY`
+  for `_remotepairing._tcp` and `_apple-mobdev2._tcp`;
+- **announces:** `_remotepairing._tcp` and `_apple-mobdev2._tcp` (SRV records
+  with high ephemeral ports). It doesn't announce `_carplay-ctrl._tcp` yet,
+  presumably until it finds an AirPlay receiver;
+- **IPv4:** sends DHCP DISCOVERs from `0.0.0.0` (5 in 30 s; nobody answers)
+  and ARP. It also uses IPv6.
+
+**Next:** answer as stock does. That means an IPv6 link-local address with
+neighbour advertisements, and an mDNS response for `_airplay._tcp` with
+stock's TXT record. Then watch for the phone's TCP connection.
+
+## 2026-11-27 (night): the iPhone connects to us and asks to pair
+
+**Our side of the network.** `carplaytest.c` now has an IPv6 link-local
+address (`fe80::f1:33ff:fe00:2`), answers neighbour solicitations and pings,
+and answers `_airplay._tcp` with stock's exact records (instance `CarPlay`,
+`Computer.local:7000`, stock's TXT; `docs/carplay-iap2.md` §5). A Mac on the
+same gadget resolves all of it with `dns-sd`.
+
+**That wasn't enough: the phone kept asking and never connected.** The missing
+step is an iAP2 exchange that stock's identification never declares (found
+by reading the public receivers xcertplay and LIVI; nothing copied;
+`docs/carplay-hosting-plan.md`, "What gets the phone to connect"):
+- declare `0x4301` CarPlayStartSession (sent) and `0x4300`
+  CarPlayAvailability (received) in identification;
+- the phone sends `0x4300` (75 bytes, wired available = 1);
+- we answer `0x4301` with our link-local address, port 7000, our MAC as
+  device id, a public key (placeholder for now) and a source version.
+
+Nobody had shown this working on a role-switched gadget; it does.
+
+**Then, on the bench:**
+1. the phone sends a neighbour solicitation for our address (we answer);
+2. it opens TCP to port 7000: 8 SYNs while nothing listened;
+3. with a minimal TCP responder, the connection is established and the
+   first request is **`POST /pair-setup RTSP/1.0`** (278 bytes,
+   `application/x-…` body);
+4. we don't answer yet, so it closes and retries once.
+
+Side notes: the phone's time arrives in `4E0B` and decodes correctly
+(`2026-11-27 20:22:11`, UTC−7). With no DHCP answer the phone eventually
+self-assigns `169.254.x.x`; IPv6 is the path that matters.
+
+**Direction:** stock `carplay.mod` hosting is parked. Its licence check
+(`/dev/spinor2` ioctl 9) is a handshake against a secret key in the vendor
+kernel, and video breaks without it; satisfying it would mean reproducing
+that secret (`docs/carplay-hosting-plan.md` §1). We write our own receiver.
+
+**Next:** pairing. `pair-setup` is SRP-6a (3072-bit, SHA-512) with Ed25519
+and ChaCha20-Poly1305, then `pair-verify` (X25519), then MFi-SAP signed by
+our MFi chip. That needs a bignum modexp and a small crypto library, a real
+step up from the bench tests so far.
+
+## 2026-11-27 (late): paired, authenticated, and the phone asks for a session
+
+Our own receiver code now gets through everything before the session itself:
+
+| Step | Result on the bench |
+|---|---|
+| pair-setup M1–M6 (SRP-6a, PIN 3939) | phone's PIN proof accepted, long-term keys exchanged |
+| pair-verify (X25519, Ed25519) | VERIFIED in 37 ms |
+| encrypted control channel | phone's frames decrypt, ours are accepted (0 bad) |
+| auth-setup (MFi-SAP) | MFi chip signs SHA-256 of the session keys in 472 ms; phone accepts |
+| next request | `SETUP rtsp://fe80::f1:33ff:fe00:2/…` (binary plist) |
+
+**What it took:**
+- `bn.c`: a 3072-bit Montgomery bignum, written for this project.
+- `srp.c`: SRP-6a, with its group prime checked against RFC 3526's formula.
+- `pair.c`: TLV8 pair-setup and pair-verify.
+- `hashes.c`: SHA-1, SHA-256 and AES-128-CTR.
+- Monocypher 4.0.2, vendored unmodified (BSD-2/CC0), for X25519, Ed25519, SHA-512/HKDF and ChaCha20-Poly1305.
+- Each piece is tested on the Mac against independent Python implementations (`tools/fel/dram/test/`). There's also a known-answer self-test on the device.
+
+**Two lessons:**
+- **The D-cache.** The first on-device pairing took **6 s** for one SRP step, and the phone gave up. Under FEL the D-cache is off. With `dcache_enable()` (USB here is PIO, and the screen already flushes), plus precomputing the SRP verifier at boot, pair-verify takes 37 ms.
+- **The phone's first pair-setup message** is `00 01 00 06 01 01` (method 0, state 1, no transient flag), sent as `application/x-apple-binary-plist` even though the body is TLV8.
+
+**Next:** SETUP / RECORD (binary plists), then the screen stream and H.264.
+
+## 2026-11-27 (night): the iPhone streams its CarPlay screen to our firmware
+
+With `docs/carplay-session.md` implemented, the whole session runs:
+
+`AUTH SETUP1 INFO REC CMD S110 FB`
+
+| Item | On the bench |
+|---|---|
+| connections | control (7000), event channel (7001, the phone connects back), screen (7002) |
+| `/info` | accepted: our 1280×720 display, one view area, touch descriptor, no audio |
+| screen config | `avcC`, **H.264 High profile, level 3.1, 1280×720** (parsed from the SPS) |
+| first frame | 135 ms after SETUP 110 |
+| one minute of streaming | 1,043 frames decrypted (9.9 MB, about 17 fps while idle), 2 bad, 1 counter resync |
+
+**The screen stream:**
+- Each message has a 128-byte header.
+- The frames are ChaCha20-Poly1305, with that header as the AAD.
+- The key is HKDF over the pair-verify secret with `DataStream-Salt<streamConnectionID>`. The ID is above 2⁶³ and is printed unsigned.
+
+**Counter resync.** In the first run we kept counting while the phone's frame counter jumped: 213 good, then every frame failed. Now the counter restarts with each config message, and a failed frame tries a few nearby counters before giving up.
+
+**Not used yet:**
+- The phone never sent a timing packet (`ntp 0`).
+- It never sent anything on the event channel.
+- Audio was left out of SETUP and never came.
+
+All of this is tested on the Mac with a real x264 stream (`tools/fel/dram/test/session_check.py`).
+
+**Next:** decode the H.264 on the Cedar VE (`docs/video-decode.md`) and show it on the panel, then touch, then audio.
