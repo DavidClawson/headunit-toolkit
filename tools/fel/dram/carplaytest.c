@@ -18,6 +18,9 @@
 #include "display.h"
 #include "gfx.h"
 #include "twi.h"
+#include "pair.h"
+#include "third_party/monocypher/monocypher.h"
+#include "third_party/monocypher/monocypher-ed25519.h"
 
 #define USB0      0x04100000u
 #define FIFO0     (USB0 + 0x00)
@@ -501,6 +504,8 @@ static int auth_result;                   /* 0 none, 1 succeeded (AA05), -1 fail
    receivers use to start wired CarPlay (docs/carplay-hosting-plan.md, "What gets the
    phone to connect"). The public key is a placeholder until pairing exists. */
 static int n_avail, n_start, avail_wired = -1;
+static pair_ctx pc;
+static char pc_hex[65];                   /* our long-term Ed25519 public key, hex */
 static void start_session(void)
 {
 	mb_begin(0x4301);
@@ -508,8 +513,8 @@ static void start_session(void)
 		mb_str(0, "fe80::f1:33ff:fe00:2");               /* our link-local, no scope */
 	mb_end();
 	mb_u32(2, 7000);                                     /* AirPlay port */
-	mb_str(3, "02:f1:33:00:00:02");                      /* device id: our NCM MAC */
-	mb_str(4, "3b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29");   /* public key (placeholder) */
+	mb_str(3, "02:f1:33:00:00:02");                      /* device id: our NCM MAC (= pairing identifier) */
+	mb_str(4, pc_hex);                                   /* our long-term Ed25519 public key (pairing identity) */
 	mb_str(5, "320.14");                                 /* source version, as in our TXT */
 	mb_send();
 	n_start++;
@@ -920,88 +925,237 @@ static void ask_phone(void)                                 /* mDNS query: _remo
 	send6(0, mdns6, 17, ul);
 }
 
-/* Minimal TCP, one connection on the AirPlay port. It accepts the connection and
-   acknowledges data so we can see the phone's first requests; it sends nothing back
-   at the HTTP/RTSP level yet. Only request lines and Content-Type/Length are kept
-   (other headers can carry phone identifiers). */
+/* TCP, one connection on the AirPlay port, and the RTSP requests on it.
+   Pairing requests go to pair.c; anything else is only recorded. Only request
+   lines and our own status are shown (headers can carry phone identifiers). */
 static int tcp_state;                     /* 0 listen, 1 SYN received, 2 established, 3 closed by peer */
 static uint8_t tcp_peer_mac[6], tcp_peer[16];
 static uint16_t tcp_pport;
-static uint32_t tcp_iss = 0x0F133000, tcp_snd_nxt, tcp_rcv_nxt, tcp_rx_bytes, n_conn, n_fin, n_rst_in;
-static char req_lines[4][72]; static int n_req;
-static char req_ctype[48]; static uint32_t req_clen; static int req_hdr_done;
-static char tcp_line[160]; static int tcp_line_n;
-static void tcp_send(uint8_t flags, int mss)
+static uint32_t tcp_iss = 0x0F133000, tcp_snd_una, tcp_snd_nxt, tcp_rcv_nxt, tcp_rx_bytes, n_conn, n_fin, n_rst_in;
+static uint32_t tcp_last_tx, n_retx;
+static uint8_t txq[8192]; static int txq_n;          /* sent or queued, not yet acknowledged; starts at snd_una */
+static uint8_t rq[8192]; static int rq_n;            /* received request bytes not yet handled */
+static char req_lines[2][72]; static int n_req;      /* last two request lines */
+static uint32_t n_enc_rx;                            /* bytes after pair-verify (encrypted channel) */
+static const char *pair_status = "";
+static int ps_last, pv_last;                         /* last pairing step reached */
+static uint32_t pair_ms;                             /* time spent in the last pairing step */
+
+static int s_eq(const char *a, const char *b) { while (*a && *a == *b) { a++; b++; } return *a == *b; }
+static void mmove(uint8_t *d, const uint8_t *s, int n) { for (int i = 0; i < n; i++) d[i] = s[i]; }   /* d < s only */
+
+static void tcp_seg(uint8_t flags, uint32_t seq, const uint8_t *d, int n, int mss)
 {
 	uint8_t *p = tx6 + 54;
 	int hl = mss ? 24 : 20;
 	memset(p, 0, (size_t)hl);
 	p[0] = (uint8_t)(AP_PORT >> 8); p[1] = (uint8_t)AP_PORT; p[2] = (uint8_t)(tcp_pport >> 8); p[3] = (uint8_t)tcp_pport;
-	uint32_t s = tcp_snd_nxt, a = tcp_rcv_nxt;
-	p[4] = (uint8_t)(s >> 24); p[5] = (uint8_t)(s >> 16); p[6] = (uint8_t)(s >> 8); p[7] = (uint8_t)s;
+	uint32_t a = tcp_rcv_nxt;
+	p[4] = (uint8_t)(seq >> 24); p[5] = (uint8_t)(seq >> 16); p[6] = (uint8_t)(seq >> 8); p[7] = (uint8_t)seq;
 	p[8] = (uint8_t)(a >> 24); p[9] = (uint8_t)(a >> 16); p[10] = (uint8_t)(a >> 8); p[11] = (uint8_t)a;
 	p[12] = (uint8_t)(hl / 4 << 4); p[13] = flags; p[14] = 0x20; p[15] = 0x00;   /* window 8192 */
 	if (mss) { p[20] = 2; p[21] = 4; p[22] = (uint8_t)(1400 >> 8); p[23] = (uint8_t)(1400 & 255); }
-	send6(tcp_peer_mac, tcp_peer, 6, hl);
+	if (n) memcpy(p + hl, d, (size_t)n);
+	send6(tcp_peer_mac, tcp_peer, 6, hl + n);
 }
-static void tcp_text_line(void)                    /* one header line of the phone's request */
+
+static void tcp_flush(int from_una)                 /* send queued data (all of it again after a timeout) */
 {
-	tcp_line[tcp_line_n] = 0;
-	if (!req_hdr_done && tcp_line_n == 0) { req_hdr_done = 1; return; }
-	if (!req_hdr_done) {
-		const char *l = tcp_line;
-		int first = 1;
-		for (int i = 0; i < 4 && l[i]; i++) if (l[i] == ':') first = 0;
-		int sp = 0; for (int i = 0; l[i]; i++) if (l[i] == ' ') sp++;
-		if (sp >= 2 && (!memcmp(l + tcp_line_n - 8, "RTSP/1.0", 8) || !memcmp(l + tcp_line_n - 8, "HTTP/1.1", 8) || !memcmp(l + tcp_line_n - 8, "HTTP/1.0", 8)) && first && n_req < 4) {
-			int k = 0; while (l[k] && k < 71) { req_lines[n_req][k] = l[k]; k++; } req_lines[n_req][k] = 0; n_req++;
-		} else if (!memcmp(l, "Content-Type:", 13) || !memcmp(l, "content-type:", 13)) {
-			int k = 0; const char *v = l + 13; while (*v == ' ') v++; while (v[k] && k < 47) { req_ctype[k] = v[k]; k++; } req_ctype[k] = 0;
-		} else if (!memcmp(l, "Content-Length:", 15) || !memcmp(l, "content-length:", 15)) {
-			const char *v = l + 15; uint32_t x = 0; while (*v == ' ') v++; while (*v >= '0' && *v <= '9') x = x * 10 + (uint32_t)(*v++ - '0'); req_clen = x;
+	uint32_t start = from_una ? tcp_snd_una : tcp_snd_nxt;
+	int off = (int)(start - tcp_snd_una);
+	while (off < txq_n) {
+		int n = txq_n - off; if (n > 1400) n = 1400;
+		tcp_seg(off + n == txq_n ? 0x18 : 0x10, tcp_snd_una + (uint32_t)off, txq + off, n, 0);   /* PSH on the last */
+		off += n;
+	}
+	tcp_snd_nxt = tcp_snd_una + (uint32_t)txq_n;
+	tcp_last_tx = millis();
+}
+
+static void tcp_write(const void *d, int n)
+{
+	if (txq_n + n > (int)sizeof txq) return;
+	memcpy(txq + txq_n, d, (size_t)n); txq_n += n;
+	tcp_flush(0);
+}
+
+static void tcp_poll(void)                          /* retransmit after 300 ms without an ACK */
+{
+	if (tcp_state == 2 && txq_n && millis() - tcp_last_tx > 300) { n_retx++; tcp_flush(1); }
+}
+
+static void respond(const char *proto, const char *cseq, const uint8_t *body, int n)
+{
+	static char h[256];
+	char *q = str_cat(h, proto); q = str_cat(q, " 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: ");
+	q = str_u(q, (uint32_t)n);
+	if (cseq[0]) { q = str_cat(q, "\r\nCSeq: "); q = str_cat(q, cseq); }
+	q = str_cat(q, "\r\nServer: AirTunes/320.14\r\n\r\n");
+	static uint8_t all[4096];
+	int hl = (int)(q - h);
+	if (hl + n > (int)sizeof all) return;
+	memcpy(all, h, (size_t)hl); if (n) memcpy(all + hl, body, (size_t)n);
+	tcp_write(all, hl + n);
+}
+
+static int hdr_is(const char *l, const char *name)  /* case-insensitive "Name:" prefix */
+{
+	int i = 0;
+	for (; name[i]; i++) { char a = l[i], b = name[i]; if (a >= 'A' && a <= 'Z') a += 32; if (b >= 'A' && b <= 'Z') b += 32; if (a != b) return 0; }
+	return l[i] == ':';
+}
+
+static void handle_requests(void)
+{
+	for (;;) {
+		int he = -1;                                    /* end of headers */
+		for (int i = 0; i + 3 < rq_n; i++) if (rq[i] == '\r' && rq[i + 1] == '\n' && rq[i + 2] == '\r' && rq[i + 3] == '\n') { he = i + 4; break; }
+		if (he < 0) { if (rq_n == (int)sizeof rq) rq_n = 0; return; }
+		char line[160], method[16] = "", path[64] = "", proto[16] = "RTSP/1.0", cseq[16] = "";
+		int clen = 0, first = 1;
+		for (int i = 0; i < he - 2; ) {                 /* header lines */
+			int k = 0;
+			while (i < he - 2 && !(rq[i] == '\r' && rq[i + 1] == '\n')) { if (k < 159) line[k++] = (rq[i] >= 32 && rq[i] < 127) ? (char)rq[i] : '.'; i++; }
+			line[k] = 0; i += 2;
+			if (first) {
+				first = 0;
+				int a = 0, j = 0;
+				while (line[j] && line[j] != ' ' && a < 15) method[a++] = line[j++]; method[a] = 0; if (line[j]) j++;
+				a = 0; while (line[j] && line[j] != ' ' && a < 63) path[a++] = line[j++]; path[a] = 0; if (line[j]) j++;
+				a = 0; while (line[j] && a < 15) proto[a++] = line[j++]; proto[a] = 0;
+				memcpy(req_lines[0], req_lines[1], sizeof req_lines[0]);
+				int m = 0; while (line[m] && m < 71) { req_lines[1][m] = line[m]; m++; } req_lines[1][m] = 0;
+				n_req++;
+			} else if (hdr_is(line, "Content-Length")) {
+				const char *v = line + 15; while (*v == ' ') v++; while (*v >= '0' && *v <= '9') clen = clen * 10 + (*v++ - '0');
+			} else if (hdr_is(line, "CSeq")) {
+				const char *v = line + 5; int a = 0; while (*v == ' ') v++; while (*v && a < 15) cseq[a++] = *v++; cseq[a] = 0;
+			}
 		}
+		if (clen < 0 || he + clen > (int)sizeof rq) { rq_n = 0; return; }
+		if (rq_n < he + clen) return;                   /* body not complete yet */
+		const uint8_t *body = rq + he;
+		static uint8_t out[2048];
+		int r = -2;
+		if (s_eq(path, "/pair-setup")) {
+			uint32_t t0 = millis();
+			r = pair_setup(&pc, body, clen, out, sizeof out);
+			pair_ms = millis() - t0;
+			ps_last = pc.ps_state;
+			pair_status = pc.last_err ? "pair-setup FAILED" : pc.ps_state == 6 ? "PAIRED (setup M6 sent)" : pc.ps_state == 4 ? "PIN proof OK (M4 sent)" : "pair-setup M2 sent";
+		} else if (s_eq(path, "/pair-verify")) {
+			uint32_t t0 = millis();
+			r = pair_verify(&pc, body, clen, out, sizeof out);
+			pair_ms = millis() - t0;
+			pv_last = pc.pv_state;
+			pair_status = pc.last_err ? "pair-verify FAILED" : pc.verified ? "VERIFIED: session keys ready" : "pair-verify M2 sent";
+		}
+		if (r >= 0) respond(proto, cseq, out, r);
+		int used = he + clen;
+		mmove(rq, rq + used, rq_n - used); rq_n -= used;
+		if (pc.verified) { n_enc_rx += (uint32_t)rq_n; rq_n = 0; return; }   /* the rest is encrypted */
 	}
 }
-static void tcp_data(const uint8_t *d, int n)
-{
-	for (int i = 0; i < n; i++) {
-		uint8_t c = d[i];
-		if (req_hdr_done) continue;                    /* body (binary) is only counted */
-		if (c == '\r') continue;
-		if (c == '\n') { tcp_text_line(); tcp_line_n = 0; continue; }
-		if (tcp_line_n < (int)sizeof tcp_line - 1) tcp_line[tcp_line_n++] = (c >= 32 && c < 127) ? (char)c : '.';
-	}
-}
+
 static void on_tcp(const uint8_t *f, const uint8_t *ip, const uint8_t *p, int plen)
 {
 	uint16_t sp = (uint16_t)(p[0] << 8 | p[1]);
 	uint8_t fl = p[13];
 	uint32_t seq = (uint32_t)p[4] << 24 | (uint32_t)p[5] << 16 | (uint32_t)p[6] << 8 | p[7];
+	uint32_t ack = (uint32_t)p[8] << 24 | (uint32_t)p[9] << 16 | (uint32_t)p[10] << 8 | p[11];
 	int hl = (p[12] >> 4) * 4;
 	if (hl < 20 || hl > plen) return;
 	if (fl & 0x04) { if (sp == tcp_pport) { n_rst_in++; tcp_state = 0; } return; }
 	if (fl & 0x02) {                                    /* SYN: (re)start the connection */
 		if (tcp_state == 0 || sp != tcp_pport || tcp_state == 3) {
 			memcpy(tcp_peer_mac, f + 6, 6); memcpy(tcp_peer, ip + 8, 16); tcp_pport = sp;
-			tcp_rcv_nxt = seq + 1; tcp_snd_nxt = tcp_iss; tcp_state = 1; n_conn++;
-			req_hdr_done = 0; tcp_line_n = 0;
+			tcp_rcv_nxt = seq + 1; tcp_state = 1; n_conn++;
+			tcp_iss += 0x10000;
+			tcp_snd_una = tcp_snd_nxt = tcp_iss + 1; txq_n = 0; rq_n = 0;
+			pc.verified = 0;                            /* a new connection starts unencrypted */
 		}
-		uint32_t s = tcp_snd_nxt; tcp_snd_nxt = tcp_iss;
-		tcp_send(0x12, 1);                              /* SYN+ACK */
-		tcp_snd_nxt = s == tcp_iss ? tcp_iss + 1 : s;
+		tcp_seg(0x12, tcp_iss, 0, 0, 1);                /* SYN+ACK */
 		return;
 	}
 	if (sp != tcp_pport || tcp_state == 0) return;
-	if ((fl & 0x10) && tcp_state == 1) tcp_state = 2;
+	if (fl & 0x10) {
+		if (tcp_state == 1) tcp_state = 2;
+		uint32_t acked = ack - tcp_snd_una;
+		if (acked && acked <= (uint32_t)txq_n) {
+			mmove(txq, txq + acked, txq_n - (int)acked); txq_n -= (int)acked; tcp_snd_una = ack;
+			tcp_last_tx = millis();
+		}
+	}
 	int dl = plen - hl;
 	if (dl > 0) {
-		if (seq == tcp_rcv_nxt) { tcp_data(p + hl, dl); tcp_rcv_nxt += (uint32_t)dl; tcp_rx_bytes += (uint32_t)dl; }
-		tcp_send(0x10, 0);                              /* ACK (also re-ACKs duplicates) */
+		if (seq == tcp_rcv_nxt) {
+			tcp_rcv_nxt += (uint32_t)dl; tcp_rx_bytes += (uint32_t)dl;
+			if (pc.verified) n_enc_rx += (uint32_t)dl;
+			else if (rq_n + dl <= (int)sizeof rq) { memcpy(rq + rq_n, p + hl, (size_t)dl); rq_n += dl; }
+			tcp_seg(0x10, tcp_snd_nxt, 0, 0, 0);        /* ACK before the (slow) pairing maths */
+			if (!pc.verified) handle_requests();
+		} else tcp_seg(0x10, tcp_snd_nxt, 0, 0, 0);     /* re-ACK out-of-order or duplicate data */
 	}
 	if ((fl & 0x01) && seq + (uint32_t)(dl > 0 ? dl : 0) == tcp_rcv_nxt) {   /* FIN */
 		tcp_rcv_nxt++; n_fin++; tcp_state = 3;
-		tcp_send(0x11, 0); tcp_snd_nxt++;               /* FIN+ACK */
+		tcp_seg(0x11, tcp_snd_nxt, 0, 0, 0); tcp_snd_nxt++;
 	}
+}
+
+/* randomness: cycle-counter jitter of every received frame, hashed */
+static uint64_t ent[16]; static uint32_t ent_i, rng_ctr;
+static void ent_mix(void) { uint32_t i = ent_i++; ent[i & 15] ^= cycles() * 0x9E3779B97F4A7C15ull + i; }
+static void dev_rng(uint8_t *o, int n)
+{
+	while (n > 0) {
+		uint8_t h[64];
+		ent_mix(); rng_ctr++;
+		crypto_sha512_ctx c;
+		crypto_sha512_init(&c);
+		crypto_sha512_update(&c, (const uint8_t *)ent, sizeof ent);
+		crypto_sha512_update(&c, (const uint8_t *)&rng_ctr, sizeof rng_ctr);
+		crypto_sha512_final(&c, h);
+		int k = n > 32 ? 32 : n;
+		memcpy(o, h, (size_t)k); o += k; n -= k;
+		ent[rng_ctr & 15] ^= *(uint64_t *)(h + 32);    /* forward the pool */
+	}
+}
+
+/* known-answer self-test: the same inputs give these bytes on the Mac (test/kat_host.c) */
+static int kat_ok = -1; static uint32_t kat_srp_ms;
+static void crypto_selftest(void)
+{
+	static const uint8_t want_pk[8] = { 0xe4,0x03,0x09,0x98,0xcf,0xd5,0xad,0x17 };
+	static const uint8_t want_hb[8] = { 0x45,0x04,0x24,0x22,0x76,0xf5,0x6a,0xd8 };
+	static pair_ctx k; static srp_server s;
+	uint8_t seed[32], salt[16], b[32], h[64];
+	for (int i = 0; i < 32; i++) seed[i] = (uint8_t)(i * 7 + 1);
+	pair_init(&k, seed, "x", "3939", dev_rng);
+	for (int i = 0; i < 16; i++) salt[i] = (uint8_t)i;
+	for (int i = 0; i < 32; i++) b[i] = (uint8_t)(i + 1);
+	uint32_t t0 = millis();
+	srp_start(&s, "Pair-Setup", "3939", salt, b);
+	kat_srp_ms = millis() - t0;
+	crypto_sha512(h, s.Bbytes, BN_BYTES);
+	kat_ok = !memcmp(k.ltpk, want_pk, 8) && !memcmp(h, want_hb, 8);
+}
+
+#define PAIR_ID "02:f1:33:00:00:02"
+static void pairing_init(void)                      /* long-term key from this chip's unique ID */
+{
+	uint8_t sid[16], seed[64];
+	for (int i = 0; i < 4; i++) { uint32_t w = rd32(0x03006200 + 4 * (uint32_t)i); for (int j = 0; j < 4; j++) sid[4 * i + j] = (uint8_t)(w >> (8 * j)); }
+	crypto_sha512_ctx c;
+	crypto_sha512_init(&c);
+	crypto_sha512_update(&c, (const uint8_t *)"headunit-toolkit carplay ltsk v1", 32);
+	crypto_sha512_update(&c, sid, 16);
+	crypto_sha512_final(&c, seed);
+	pair_init(&pc, seed, PAIR_ID, "3939", dev_rng);
+	crypto_wipe(seed, sizeof seed); crypto_wipe(sid, sizeof sid);
+	static const char hx[] = "0123456789abcdef";
+	for (int i = 0; i < 32; i++) { pc_hex[2 * i] = hx[pc.ltpk[i] >> 4]; pc_hex[2 * i + 1] = hx[pc.ltpk[i] & 15]; }
+	pc_hex[64] = 0;
+	crypto_selftest();
 }
 
 static void on_ip6(const uint8_t *f, int l)
@@ -1033,6 +1187,7 @@ static void on_ip6(const uint8_t *f, int l)
 
 static void on_frame(const uint8_t *f, int l, uint16_t ty)
 {
+	ent_mix();
 	if (ty == 0x86DD) on_ip6(f, l);
 	const uint8_t *u = 0; int ul = 0;
 	if (ty == 0x86DD && l >= 14 + 40 + 8 && f[20] == 17) { u = f + 54; ul = (f[18] << 8 | f[19]); }
@@ -1051,6 +1206,7 @@ static void on_frame(const uint8_t *f, int l, uint16_t ty)
 static void device_poll(void)
 {
 	musb_poll();
+	tcp_poll();
 	if (notify_pending) {
 		notify_pending = 0;
 		uint8_t sp[16] = { 0xA1, 0x2A, 0, 0, 1, 0, 8, 0 };
@@ -1199,12 +1355,24 @@ static void status(void)
 		{
 			static const char *const st[] = { "listen", "SYN rcvd", "ESTABLISHED", "closed by phone" };
 			p = str_cat(s, "TCP 7000: "); p = str_cat(p, st[tcp_state]); p = str_cat(p, "  conns "); p = str_u(p, n_conn);
-			p = str_cat(p, "  rx "); p = str_u(p, tcp_rx_bytes); p = str_cat(p, " B  fin "); p = str_u(p, n_fin); p = str_cat(p, " rst "); p = str_u(p, n_rst_in);
-			if (req_ctype[0]) { p = str_cat(p, "  type "); p = str_cat(p, req_ctype); }
-			if (req_clen) { p = str_cat(p, "  len "); p = str_u(p, req_clen); }
-			p = str_cat(p, "  requests "); p = str_u(p, (uint32_t)n_req);
+			p = str_cat(p, "  rx "); p = str_u(p, tcp_rx_bytes); p = str_cat(p, " retx "); p = str_u(p, n_retx);
+			p = str_cat(p, " fin "); p = str_u(p, n_fin); p = str_cat(p, " rst "); p = str_u(p, n_rst_in);
+			p = str_cat(p, "  req "); p = str_u(p, (uint32_t)n_req);
 			gfx_text(30, 88, s, &font16x32, 1, tcp_state >= 2 ? 0x40ff60 : 0xffffff);
-			for (int i = 0; i < n_req && i < 2; i++) gfx_text(30, 124 + i * 36, req_lines[i], &font16x32, 1, 0xffff60);
+			p = str_cat(s, req_lines[0]); if (req_lines[0][0]) p = str_cat(p, "  |  "); p = str_cat(p, req_lines[1]);
+			gfx_text(30, 124, s, &font16x32, 1, 0xffff60);
+			if (!pair_status[0] && kat_ok >= 0) {
+				p = str_cat(s, kat_ok ? "crypto self-test OK" : "crypto self-test FAILED");
+				p = str_cat(p, "  (SRP B in "); p = str_u(p, kat_srp_ms); p = str_cat(p, " ms)");
+				gfx_text(30, 160, s, &font16x32, 1, kat_ok ? 0x40ff60 : 0xff6060);
+			}
+			if (pair_status[0]) {
+				p = str_cat(s, pair_status);
+				if (pc.last_err) { p = str_cat(p, " at "); p = str_u(p, (uint32_t)pc.last_err); }
+				p = str_cat(p, "  ("); p = str_u(p, pair_ms); p = str_cat(p, " ms)");
+				if (n_enc_rx) { p = str_cat(p, "  encrypted rx "); p = str_u(p, n_enc_rx); }
+				gfx_text(30, 160, s, &font16x32, 1, pc.last_err ? 0xff6060 : 0x40ff60);
+			}
 		}
 		p = str_cat(s, "phone IPv4 "); for (int i = 0; i < 4; i++) { p = str_u(p, phone_ip4[i]); if (i < 3) *p++ = '.'; }
 		p = str_cat(p, "  DHCP requests "); p = str_u(p, n_dhcp_req);
@@ -1289,6 +1457,7 @@ int main(void)
 	__asm__ volatile("csrci mstatus, 8\n\tcsrw mie, zero");   /* keep the boot ROM's USB handler out */
 
 	mfi_init();                                          /* certificate ready before the phone asks */
+	pairing_init();
 	/* host mode with USB-A's 5 V on, as in iphonetest.c */
 	wr32(0x02000098, (rd32(0x02000098) & ~(0xFu << 8)) | (1u << 8));    /* PD18 output */
 	wr32(0x020000A0, rd32(0x020000A0) | (1u << 18));                    /* PD18 high: VBUS on */

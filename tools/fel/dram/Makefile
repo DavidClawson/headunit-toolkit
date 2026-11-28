@@ -28,6 +28,11 @@ app2.s2: app2.bin
 stage1.fw: stage1.bin
 	./mkfw.py $< -o $@
 
+# CarPlay receiver pieces: pairing (SRP-6a, Ed25519, X25519, ChaCha20-Poly1305 via Monocypher)
+CRYPTO = bn.c srp.c pair.c third_party/monocypher/monocypher.c third_party/monocypher/monocypher-ed25519.c
+carplaytest.elf: carplaytest.c $(COMMON) $(CRYPTO) bn.h srp.h pair.h lib.h display.h gfx.h musb.h twi.h dram.ld
+	$(CROSS)gcc $(CFLAGS) -ffunction-sections -fdata-sections $(LDFLAGS) -Wl,--gc-sections -o $@ $(COMMON) $(CRYPTO) $<
+
 # the role-switch transition tested against the Mac (no iPhone)
-carplaymac.elf: carplaytest.c $(COMMON) lib.h display.h gfx.h musb.h dram.ld
-	$(CROSS)gcc $(CFLAGS) -DMACTEST -ffunction-sections -fdata-sections $(LDFLAGS) -Wl,--gc-sections -o $@ $(COMMON) $<
+carplaymac.elf: carplaytest.c $(COMMON) $(CRYPTO) lib.h display.h gfx.h musb.h dram.ld
+	$(CROSS)gcc $(CFLAGS) -DMACTEST -ffunction-sections -fdata-sections $(LDFLAGS) -Wl,--gc-sections -o $@ $(COMMON) $(CRYPTO) $<
